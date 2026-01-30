@@ -278,3 +278,24 @@ initDb()
     console.error("Erro initDb", e);
     process.exit(1);
   });
+// Páginas
+app.get("/", (req, res) => {
+  res.render("index");
+});
+
+app.get("/login", (req, res) => {
+  res.render("login");
+});
+
+app.get("/register", (req, res) => {
+  res.render("register");
+});
+
+// Ações (por enquanto só redireciona)
+app.post("/login", (req, res) => {
+  res.redirect("/");
+});
+
+app.post("/register", (req, res) => {
+  res.redirect("/login");
+});
