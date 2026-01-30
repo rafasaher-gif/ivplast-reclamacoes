@@ -126,7 +126,10 @@ async function nextCaseNumber() {
 }
 
 // ---------- PÁGINAS ----------
-app.get("/", (req, res) => (req.session.user ? res.redirect("/cases") : res.redirect("/login")));
+app.get("/", (req, res) => {
+  res.render("index");
+});
+
 
 app.get("/login", (req, res) => res.render("login", { error: null }));
 
