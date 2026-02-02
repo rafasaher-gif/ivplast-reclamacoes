@@ -1,72 +1,72 @@
 import express from "express";
 import session from "express-session";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// -------- CONFIG --------
+/* ===== CONFIG ===== */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 app.set("view engine", "ejs");
-app.set("views", "./views");
+app.set("views", path.join(__dirname, "views"));
 
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.static("public"));
 
 app.use(
   session({
     secret: "ivplast-secret",
     resave: false,
-    saveUninitialized: false
+    saveUninitialized: false,
   })
 );
 
-// -------- ROTAS --------
+/* ===== USUÁRIOS (temporário, depois vai para banco) ===== */
+const users = [
+  {
+    email: "raphael@ivplast.com.br",
+    password: "123456",
+    role: "VENDEDOR",
+  },
+  {
+    email: "diretor@ivplast.com.br",
+    password: "123456",
+    role: "DIRETORIA",
+  },
+];
 
-// LOGIN (TELA)
+/* ===== ROTAS ===== */
+
+// LOGIN PAGE
 app.get("/login", (req, res) => {
-  res.render("login", {
-    error: null,
-    systemName: "SOLUÇÕES DE BUCHAS IVPLAST"
-  });
+  res.render("login");
 });
 
-// LOGIN (AÇÃO)
+// LOGIN POST
 app.post("/login", (req, res) => {
   const { email, password } = req.body;
 
-  if (!email || !password) {
-    return res.render("login", {
-      error: "Preencha email e senha",
-      systemName: "SOLUÇÕES DE BUCHAS IVPLAST"
-    });
+  const user = users.find(
+    (u) => u.email === email && u.password === password
+  );
+
+  if (!user) {
+    return res.send("Login inválido");
   }
 
-  // login fake por enquanto
-  req.session.user = {
-    email,
-    role: "diretoria"
-  };
-
+  req.session.user = user;
   res.redirect("/dashboard");
-});
-
-// CADASTRO (TELA)
-app.get("/register", (req, res) => {
-  res.render("register");
-});
-
-// CADASTRO (AÇÃO)
-app.post("/register", (req, res) => {
-  res.redirect("/login");
 });
 
 // DASHBOARD
 app.get("/dashboard", (req, res) => {
-  if (!req.session.user) {
-    return res.redirect("/login");
-  }
+  if (!req.session.user) return res.redirect("/login");
 
   res.render("dashboard", {
-    user: req.session.user
+    user: req.session.user,
   });
 });
 
@@ -79,10 +79,11 @@ app.get("/logout", (req, res) => {
 
 // HOME
 app.get("/", (req, res) => {
-  res.redirect("/login");
+  if (!req.session.user) return res.redirect("/login");
+  res.redirect("/dashboard");
 });
 
-// START
+/* ===== SERVER ===== */
 app.listen(PORT, () => {
-  console.log("Servidor rodando na porta", PORT);
+  console.log("Servidor rodando na porta " + PORT);
 });
