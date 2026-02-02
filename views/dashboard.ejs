@@ -1,8 +1,37 @@
-<h1>Dashboard</h1>
+<h1>SOLUÇÕES DE BUCHAS IVPLAST</h1>
 
-<p>
-  Logado como: <strong><%= user.email %></strong>
-  (<%= user.role %>)
-</p>
+<p>Logado como: <b><%= user.email %></b> (<%= user.role %>)</p>
 
+<form method="GET" action="/dashboard">
+  <input name="q" placeholder="Pesquisar solicitações" />
+  <button type="submit">Buscar</button>
+</form>
+
+<br>
+
+<table border="1" cellpadding="8" cellspacing="0">
+  <tr>
+    <th>Cliente</th>
+    <th>ID</th>
+    <th>Criado</th>
+    <th>Última atividade</th>
+    <th>Status</th>
+  </tr>
+
+  <% if (ocorrencias && ocorrencias.length) { %>
+    <% ocorrencias.forEach(o => { %>
+      <tr>
+        <td><%= o.cliente %></td>
+        <td><%= o.id %></td>
+        <td><%= o.criado %></td>
+        <td><%= o.ultima %></td>
+        <td><%= o.status %></td>
+      </tr>
+    <% }) %>
+  <% } else { %>
+    <tr><td colspan="5">Nenhuma ocorrência em aberto</td></tr>
+  <% } %>
+</table>
+
+<br>
 <a href="/logout">Sair</a>
