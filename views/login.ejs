@@ -1,1 +1,22 @@
-<h1>Login OK</h1>
+<!DOCTYPE html>
+<html>
+<head>
+  <title><%= systemName %></title>
+</head>
+<body>
+  <h2><%= systemName %></h2>
+
+  <% if (error) { %>
+    <p style="color:red;"><%= error %></p>
+  <% } %>
+
+  <form method="POST" action="/login">
+    <input type="email" name="email" placeholder="Email" required><br><br>
+    <input type="password" name="password" placeholder="Senha" required><br><br>
+    <button type="submit">Entrar</button>
+  </form>
+
+  <br>
+  <a href="/register">Cadastrar</a>
+</body>
+</html>
