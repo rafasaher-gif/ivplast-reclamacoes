@@ -65,10 +65,22 @@ app.post("/login", (req, res) => {
 app.get("/dashboard", (req, res) => {
   if (!req.session.user) return res.redirect("/login");
 
-  res.render("dashboard", {
-    user: req.session.user,
-  });
+  const q = String(req.query.q || "").toLowerCase().trim();
+
+  let ocorrencias = [
+    { cliente: "SOLDAS BRASIL COMERCIAL LTDA", id: "#12484", criado: "há 27 dias", ultima: "há 2 horas", status: "Aberto" },
+    { cliente: "3E COMERCIAL LTDA", id: "#12619", criado: "há 24 dias", ultima: "há 2 horas", status: "Aberto" }
+  ];
+
+  if (q) {
+    ocorrencias = ocorrencias.filter(o =>
+      o.cliente.toLowerCase().includes(q) || o.id.toLowerCase().includes(q)
+    );
+  }
+
+  res.render("dashboard", { user: req.session.user, ocorrencias });
 });
+
 
 // LOGOUT
 app.get("/logout", (req, res) => {
