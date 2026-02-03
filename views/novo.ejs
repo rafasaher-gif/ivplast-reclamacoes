@@ -37,12 +37,17 @@
     .radioCompact label{margin:0;font-size:13px;color:#0f172a}
     .radioCompact input{width:auto}
 
-    /* ✅ NFD menor + mais espaço para "Algum item foi errado?" */
+    /* ✅ NFD menor + mais espaço visual */
     .gridNFD{
       display:grid;
       grid-template-columns: 240px 140px 1fr;
       gap:22px;
       align-items:end;
+    }
+
+    /* ✅ empurra apenas a coluna "Algum item foi errado?" um pouco para a direita */
+    .itemErradoCol{
+      margin-left: 18px;
     }
 
     /* itens (linha item + qtd lado a lado + remover) */
@@ -66,6 +71,7 @@
       .content{padding:14px}
       .costSmall input{max-width:100%}
       .inputSmall{width:100%;max-width:100%}
+      .itemErradoCol{margin-left:0} /* no mobile não empurra */
     }
   </style>
 </head>
@@ -208,7 +214,7 @@
             >
           </div>
 
-          <div>
+          <div class="itemErradoCol">
             <label>Algum item foi errado?</label>
             <div class="radioCompact">
               <label><input type="radio" name="item_errado" value="nao" checked> Não</label>
@@ -250,11 +256,11 @@
 </div>
 
 <script>
-  // -------- NFD: habilita campo número + força 10 dígitos --------
   function sanitizeDigits(str, maxLen){
     return String(str || "").replace(/\D/g, "").slice(0, maxLen);
   }
 
+  // -------- NFD: habilita campo + força 10 dígitos --------
   function toggleNFD(){
     const sim = document.querySelector('input[name="cliente_emitiu_nfd"][value="sim"]').checked;
     const nfd = document.getElementById("nfd");
@@ -268,14 +274,12 @@
     const nfd = document.getElementById("nfd");
     if (!nfd) return;
 
-    // corta sempre em 10, digitando ou colando
-    const handler = (e) => {
-      const v = sanitizeDigits(e.target.value, 10);
-      e.target.value = v;
+    const handler = () => {
+      nfd.value = sanitizeDigits(nfd.value, 10);
     };
 
     nfd.addEventListener("input", handler);
-    nfd.addEventListener("paste", () => setTimeout(() => handler({ target: nfd }), 0));
+    nfd.addEventListener("paste", () => setTimeout(handler, 0));
   })();
 
   // -------- Itens: habilita bloco e permite até 10 --------
@@ -350,7 +354,7 @@
     setEnabled(false);
   })();
 
-  // -------- CNPJ: trava em 14 dígitos e formata sempre 00.000.000/0000-00 --------
+  // -------- CNPJ: trava 14 dígitos e formata 00.000.000/0000-00 --------
   (function(){
     const el = document.getElementById("cnpj");
     if (!el) return;
@@ -372,13 +376,8 @@
       el.value = formatCNPJFromDigits(digits);
     };
 
-    // digitando
     el.addEventListener("input", handler);
-
-    // colando: força corte + formatação
     el.addEventListener("paste", () => setTimeout(handler, 0));
-
-    // ao sair
     el.addEventListener("blur", handler);
   })();
 </script>
