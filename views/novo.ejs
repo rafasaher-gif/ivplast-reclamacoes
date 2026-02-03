@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <style>
-    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f6fb}
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f6fb;color:#0f172a}
     .layout{display:flex;min-height:100vh}
     .sidebar{width:250px;background:#fff;border-right:1px solid #e5e7eb;padding:18px}
     .logo{font-weight:800;color:#2563eb;margin-bottom:20px}
@@ -18,21 +18,46 @@
     .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px}
     h1{margin:0;font-size:22px}
     p.sub{margin:4px 0 0;color:#64748b;font-size:13px}
-    label{display:block;font-size:13px;margin:10px 0 6px}
+    label{display:block;font-size:13px;margin:10px 0 6px;color:#334155}
     input,select,textarea{
       width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px
     }
-    textarea{min-height:110px}
+    textarea{min-height:110px;resize:vertical}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
     .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
-    .section{margin-top:18px;font-weight:700;font-size:14px}
-    .radioRow{display:flex;gap:20px;padding:10px;border:1px solid #d1d5db;border-radius:8px}
-    .radioRow label{margin:0;font-size:14px}
-    .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
-    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer}
-    .btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+    .section{margin-top:18px;font-weight:800;font-size:14px}
     .hint{font-size:12px;color:#64748b;margin-top:4px}
-    @media(max-width:900px){.sidebar{display:none}.grid,.grid3{grid-template-columns:1fr}}
+    .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:700}
+    .btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+
+    /* radios compactos */
+    .radioCompact{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .radioCompact label{margin:0;font-size:13px;color:#0f172a}
+    .radioCompact input{width:auto}
+
+    /* linha compacta 3 colunas (NFD + número + item errado) */
+    .gridNFD{display:grid;grid-template-columns: 220px 1fr 220px; gap:14px; align-items:end}
+
+    /* itens (linha item + qtd lado a lado + remover) */
+    .itemRow{display:grid;grid-template-columns: 1fr 160px 44px; gap:10px; margin-bottom:10px}
+    .itemRow label{margin-top:0}
+    .btnIcon{width:44px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:8px;border:1px solid #d1d5db;background:#fff;font-weight:900;cursor:pointer}
+    .btnIcon:hover{background:#f8fafc}
+    .btnAdd{display:inline-flex;align-items:center;justify-content:center;width:44px;height:40px;border-radius:8px;border:1px solid #2563eb;background:#2563eb;color:#fff;font-weight:900;cursor:pointer}
+    .btnAdd:hover{filter:brightness(.95)}
+
+    /* custo menor */
+    .costSmall input{max-width:180px}
+
+    @media(max-width:980px){
+      .sidebar{display:none}
+      .grid,.grid3,.gridNFD{grid-template-columns:1fr}
+      .itemRow{grid-template-columns:1fr 1fr 44px}
+      .content{padding:14px}
+      .costSmall input{max-width:100%}
+    }
   </style>
 </head>
 
@@ -55,7 +80,6 @@
 
   <!-- CONTEÚDO -->
   <main class="content">
-
     <div class="top">
       <h1>Nova Ocorrência</h1>
       <p class="sub">Preencha os dados para registrar a solicitação.</p>
@@ -91,16 +115,18 @@
         <div class="section">Classificação</div>
         <div class="grid">
           <div>
-            <label>Empresa do problema</label>
+            <label>Faturado por</label>
             <select name="empresa">
               <option value="IVPLAST">IVPLAST</option>
               <option value="VENANI">VENANI</option>
             </select>
           </div>
+
           <div>
             <label>Motivo / Origem</label>
             <select name="motivo">
-              <option value="IVPLAST">IVPLAST</option>
+              <!-- título FABRICA, value IVPLAST para não quebrar o backend -->
+              <option value="IVPLAST">Fábrica</option>
               <option value="Cliente">Cliente</option>
               <option value="Transportadora">Transportadora</option>
               <option value="Vendedor">Vendedor</option>
@@ -122,9 +148,17 @@
           </div>
 
           <% if (canSeeCost) { %>
-          <div>
+          <div class="costSmall">
             <label>Custo estimado (R$)</label>
-            <input name="custo_estimado">
+            <input
+              name="custo_estimado"
+              type="number"
+              step="0.01"
+              min="0"
+              max="100000"
+              placeholder="0,00"
+            >
+            <div class="hint">Máximo: 100.000,00</div>
           </div>
           <% } else { %>
             <input type="hidden" name="custo_estimado">
@@ -136,38 +170,48 @@
           </div>
         </div>
 
-        <div class="section">Cliente já emitiu NFD?</div>
-        <div class="grid">
-          <div class="radioRow">
-            <label><input type="radio" name="cliente_emitiu_nfd" value="nao" checked> Não</label>
-            <label><input type="radio" name="cliente_emitiu_nfd" value="sim"> Sim</label>
+        <div class="section">NFD e itens</div>
+
+        <!-- linha compacta: NFD? + Número + Item errado? -->
+        <div class="gridNFD">
+          <div>
+            <label>Cliente já emitiu NFD?</label>
+            <div class="radioCompact">
+              <label><input type="radio" name="cliente_emitiu_nfd" value="nao" checked> Não</label>
+              <label><input type="radio" name="cliente_emitiu_nfd" value="sim"> Sim</label>
+            </div>
           </div>
+
           <div>
             <label>Número da NFD</label>
             <input id="nfd" name="nfd_numero" disabled>
           </div>
-        </div>
 
-        <div class="section">Algum item foi errado?</div>
-        <div class="grid">
-          <div class="radioRow">
-            <label><input type="radio" name="item_errado" value="nao" checked> Não</label>
-            <label><input type="radio" name="item_errado" value="sim"> Sim</label>
-          </div>
           <div>
-            <label>Item (código / descrição)</label>
-            <input id="item" name="item_descricao" disabled>
+            <label>Algum item foi errado?</label>
+            <div class="radioCompact">
+              <label><input type="radio" name="item_errado" value="nao" checked> Não</label>
+              <label><input type="radio" name="item_errado" value="sim"> Sim</label>
+            </div>
           </div>
         </div>
 
-        <div class="grid">
-          <div>
-            <label>Quantidade</label>
-            <input id="qtd" name="item_quantidade" disabled>
+        <!-- Itens dinâmicos -->
+        <div id="itensWrap" style="margin-top:12px; display:none;">
+          <div class="hint" style="margin-bottom:10px;">
+            Adicione os itens (máx. 10). Item e quantidade ficam lado a lado. Quantidade máx.: 10.000.
           </div>
-          <div>
-            <label>Observações</label>
-            <input name="item_obs">
+
+          <div id="itensList"></div>
+
+          <div style="display:flex; gap:10px; align-items:center; margin-top:6px;">
+            <button type="button" class="btnAdd" id="btnAddItem" title="Adicionar item">+</button>
+            <div class="hint" id="itensCount"></div>
+          </div>
+
+          <div style="margin-top:10px">
+            <label>Observações gerais (opcional)</label>
+            <input name="item_obs" placeholder="Ex.: veio trocado na separação / faltou no pallet..." />
           </div>
         </div>
 
@@ -178,23 +222,95 @@
           <a class="btn" href="/ocorrencias">Cancelar</a>
           <button class="btn primary" type="submit">Salvar ocorrência</button>
         </div>
+
       </form>
     </div>
   </main>
 </div>
 
 <script>
+  // NFD: habilita campo número
   function toggleNFD(){
-    const sim=document.querySelector('input[name="cliente_emitiu_nfd"][value="sim"]').checked;
-    document.getElementById("nfd").disabled=!sim;
-  }
-  function toggleItem(){
-    const sim=document.querySelector('input[name="item_errado"][value="sim"]').checked;
-    document.getElementById("item").disabled=!sim;
-    document.getElementById("qtd").disabled=!sim;
+    const sim = document.querySelector('input[name="cliente_emitiu_nfd"][value="sim"]').checked;
+    const nfd = document.getElementById("nfd");
+    nfd.disabled = !sim;
+    if (!sim) nfd.value = "";
   }
   document.querySelectorAll('input[name="cliente_emitiu_nfd"]').forEach(e=>e.addEventListener("change",toggleNFD));
-  document.querySelectorAll('input[name="item_errado"]').forEach(e=>e.addEventListener("change",toggleItem));
+  toggleNFD();
+
+  // Itens: habilita bloco e permite até 10
+  (function(){
+    const wrap = document.getElementById("itensWrap");
+    const list = document.getElementById("itensList");
+    const btnAdd = document.getElementById("btnAddItem");
+    const countEl = document.getElementById("itensCount");
+    const MAX_ITENS = 10;
+
+    function renderCount(){
+      const n = list.querySelectorAll("[data-item-row]").length;
+      countEl.textContent = n ? `${n}/${MAX_ITENS} itens` : "";
+      btnAdd.disabled = n >= MAX_ITENS;
+    }
+
+    function makeRow(){
+      const div = document.createElement("div");
+      div.setAttribute("data-item-row", "1");
+      div.className = "itemRow";
+
+      div.innerHTML = `
+        <div>
+          <label>Item (código / descrição)</label>
+          <input name="itens_descricao[]" placeholder="Ex.: 123456 - Bucha 10 (500)">
+        </div>
+
+        <div>
+          <label>Quantidade</label>
+          <input name="itens_quantidade[]" type="number" min="1" max="10000" step="1" placeholder="1">
+        </div>
+
+        <div style="display:flex;align-items:end;">
+          <button type="button" class="btnIcon" title="Remover">✕</button>
+        </div>
+      `;
+
+      div.querySelector("button").addEventListener("click", () => {
+        div.remove();
+        renderCount();
+      });
+
+      return div;
+    }
+
+    function addRow(){
+      const n = list.querySelectorAll("[data-item-row]").length;
+      if (n >= MAX_ITENS) return;
+      list.appendChild(makeRow());
+      renderCount();
+    }
+
+    function setEnabled(enabled){
+      wrap.style.display = enabled ? "block" : "none";
+      if (!enabled) {
+        list.innerHTML = "";
+        renderCount();
+      } else {
+        if (list.querySelectorAll("[data-item-row]").length === 0) addRow();
+      }
+    }
+
+    document.querySelectorAll('input[name="item_errado"]').forEach(el => {
+      el.addEventListener("change", () => {
+        const sim = document.querySelector('input[name="item_errado"][value="sim"]').checked;
+        setEnabled(sim);
+      });
+    });
+
+    btnAdd.addEventListener("click", addRow);
+
+    // estado inicial
+    setEnabled(false);
+  })();
 </script>
 
 </body>
