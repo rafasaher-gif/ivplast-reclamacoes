@@ -1,163 +1,201 @@
 <!doctype html>
 <html lang="pt-br">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8">
   <title>Nova Ocorrência - IVPLAST</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <style>
-    :root{--bg:#f5f7fb;--card:#fff;--text:#0f172a;--muted:#64748b;--line:#e5e7eb;--primary:#1d4ed8;}
-    *{box-sizing:border-box}
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
-    a{color:inherit;text-decoration:none}
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f6fb}
     .layout{display:flex;min-height:100vh}
-    .sidebar{width:260px;background:#fff;border-right:1px solid var(--line);padding:18px}
-    .brand{display:flex;gap:10px;align-items:center;margin-bottom:16px}
-    .brand .logo{font-weight:800;letter-spacing:.5px;color:#2563eb}
-    .nav{margin-top:10px}
-    .nav a{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:10px;color:var(--text)}
-    .nav a.active{background:#eef2ff;color:#1d4ed8;font-weight:600}
-    .nav a:hover{background:#f1f5f9}
-    .spacer{height:10px}
-    .content{flex:1;padding:22px}
-    .topbar{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;justify-content:space-between;align-items:center}
-    .crumbs{font-size:13px;color:var(--muted)}
-    .title{font-size:22px;font-weight:750;margin:4px 0 0}
-    .subtitle{font-size:13px;color:var(--muted);margin:2px 0 0}
-    .user{font-size:13px;color:var(--muted)}
-    .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:16px}
+    .sidebar{width:250px;background:#fff;border-right:1px solid #e5e7eb;padding:18px}
+    .logo{font-weight:800;color:#2563eb;margin-bottom:20px}
+    .menu a{display:block;padding:10px 12px;border-radius:8px;color:#111;text-decoration:none;margin-bottom:6px}
+    .menu a.active{background:#eef2ff;color:#1d4ed8;font-weight:600}
+    .menu a:hover{background:#f1f5f9}
+    .content{flex:1;padding:24px}
+    .top{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px}
+    h1{margin:0;font-size:22px}
+    p.sub{margin:4px 0 0;color:#64748b;font-size:13px}
+    label{display:block;font-size:13px;margin:10px 0 6px}
+    input,select,textarea{
+      width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px
+    }
+    textarea{min-height:110px}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
     .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
-    label{display:block;font-size:13px;color:#334155;margin-bottom:6px}
-    input,select,textarea{
-      width:100%;border:1px solid var(--line);border-radius:12px;
-      padding:11px 12px;font-size:14px;background:#fff;outline:none
-    }
-    textarea{min-height:120px;resize:vertical}
-    input:focus,select:focus,textarea:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
-    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
-    .btn{border:1px solid var(--line);background:#fff;border-radius:12px;padding:11px 14px;font-weight:650;cursor:pointer}
-    .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
-    .btn:hover{filter:brightness(.98)}
-    .alert{border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:13px}
-    .alert.err{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
-    .alert.ok{background:#ecfdf5;border:1px solid #bbf7d0;color:#166534}
-    .hint{font-size:12px;color:var(--muted);margin-top:6px}
-
-    .radioRow{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:12px}
-    .radioRow label{margin:0;font-size:14px;color:var(--text);display:flex;gap:8px;align-items:center}
-    .radioRow input{width:auto}
-
-    .sectionTitle{font-weight:750;margin:8px 0 10px;font-size:14px;color:#0f172a}
-    .divider{height:1px;background:var(--line);margin:16px 0}
-
-    @media (max-width: 980px){
-      .sidebar{display:none}
-      .content{padding:14px}
-      .grid,.grid3{grid-template-columns:1fr}
-    }
+    .section{margin-top:18px;font-weight:700;font-size:14px}
+    .radioRow{display:flex;gap:20px;padding:10px;border:1px solid #d1d5db;border-radius:8px}
+    .radioRow label{margin:0;font-size:14px}
+    .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer}
+    .btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+    .hint{font-size:12px;color:#64748b;margin-top:4px}
+    @media(max-width:900px){.sidebar{display:none}.grid,.grid3{grid-template-columns:1fr}}
   </style>
 </head>
 
 <body>
-  <div class="layout">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="logo">IVPLAST</div>
-        <div style="font-size:12px;color:#64748b">Ocorrências</div>
-      </div>
+<div class="layout">
 
-      <nav class="nav">
-        <a href="/dashboard">🏠 Menu Principal</a>
-        <a href="/novo" class="active">➕ Novo</a>
-        <a href="/ocorrencias">🔎 Busca por Ocorrência</a>
-        <a href="/relatorios">📊 Relatórios</a>
-        <a href="/configuracoes">⚙️ Configurações</a>
-        <a href="/auditoria">🧾 Auditoria</a>
-        <div class="spacer"></div>
-        <a href="/logout">🚪 Sair</a>
-      </nav>
-    </aside>
+  <!-- MENU -->
+  <aside class="sidebar">
+    <div class="logo">IVPLAST</div>
+    <div class="menu">
+      <a href="/dashboard">🏠 Menu Principal</a>
+      <a href="/novo" class="active">➕ Novo</a>
+      <a href="/ocorrencias">🔍 Busca por Ocorrência</a>
+      <a href="/relatorios">📊 Relatórios</a>
+      <a href="/configuracoes">⚙️ Configurações</a>
+      <a href="/auditoria">🧾 Auditoria</a>
+      <a href="/logout">🚪 Sair</a>
+    </div>
+  </aside>
 
-    <main class="content">
-      <div class="topbar">
-        <div>
-          <div class="crumbs">Menu Principal / Ocorrências / <b>Nova</b></div>
-          <div class="title">Nova Ocorrência</div>
-          <div class="subtitle">Preencha os dados para registrar a solicitação.</div>
+  <!-- CONTEÚDO -->
+  <main class="content">
+
+    <div class="top">
+      <h1>Nova Ocorrência</h1>
+      <p class="sub">Preencha os dados para registrar a solicitação.</p>
+      <p class="sub">Logado como: <b><%= usuario.nome %></b></p>
+    </div>
+
+    <div class="card">
+      <form method="POST" action="/novo" enctype="multipart/form-data">
+
+        <div class="section">Cliente</div>
+        <div class="grid">
+          <div>
+            <label>Razão social</label>
+            <input name="razao_social" required>
+          </div>
+          <div>
+            <label>CNPJ</label>
+            <input name="cnpj">
+          </div>
         </div>
-        <div class="user">Logado como: <b><%= (usuario && usuario.nome) ? usuario.nome : "usuário" %></b></div>
-      </div>
 
-      <div class="card">
-        <% if (error) { %><div class="alert err"><%= error %></div><% } %>
-        <% if (success) { %><div class="alert ok"><%= success %></div><% } %>
+        <div class="grid">
+          <div>
+            <label>Número do Pedido</label>
+            <input name="numero_pedido">
+          </div>
+          <div>
+            <label>Número da Nota Fiscal</label>
+            <input name="numero_nf">
+          </div>
+        </div>
 
-        <form method="POST" action="/novo" enctype="multipart/form-data">
+        <div class="section">Classificação</div>
+        <div class="grid">
+          <div>
+            <label>Empresa do problema</label>
+            <select name="empresa">
+              <option value="IVPLAST">IVPLAST</option>
+              <option value="VENANI">VENANI</option>
+            </select>
+          </div>
+          <div>
+            <label>Motivo / Origem</label>
+            <select name="motivo">
+              <option value="IVPLAST">IVPLAST</option>
+              <option value="Cliente">Cliente</option>
+              <option value="Transportadora">Transportadora</option>
+              <option value="Vendedor">Vendedor</option>
+            </select>
+          </div>
+        </div>
 
-          <div class="sectionTitle">Cliente e documento</div>
-          <div class="grid">
-            <div>
-              <label>Razão social</label>
-              <input name="razao_social" placeholder="Ex.: LIMA E SILVA COMERCIAL LTDA" required />
-            </div>
-            <div>
-              <label>CNPJ</label>
-              <input name="cnpj" placeholder="00.000.000/0000-00" />
-            </div>
+        <div class="grid3">
+          <div>
+            <label>Responsável</label>
+            <select name="responsavel">
+              <option>Atendimento</option>
+              <option>Comercial</option>
+              <option>Qualidade</option>
+              <option>Logística</option>
+              <option>Financeiro</option>
+              <option>Diretoria</option>
+            </select>
           </div>
 
-          <div class="grid" style="margin-top:14px">
-            <div>
-              <label>Número do Pedido</label>
-              <input name="numero_pedido" placeholder="Ex.: 69234" />
-            </div>
-            <div>
-              <label>Número da Nota Fiscal</label>
-              <input name="numero_nf" placeholder="Ex.: 12345" />
-            </div>
+          <% if (canSeeCost) { %>
+          <div>
+            <label>Custo estimado (R$)</label>
+            <input name="custo_estimado">
           </div>
+          <% } else { %>
+            <input type="hidden" name="custo_estimado">
+          <% } %>
 
-          <div class="divider"></div>
-
-          <div class="sectionTitle">Classificação</div>
-          <div class="grid">
-            <div>
-              <label>Empresa do problema</label>
-              <select name="empresa" required>
-                <option value="IVPLAST">IVPLAST</option>
-                <option value="VENANI">VENANI</option>
-              </select>
-              <div class="hint">Escolha onde ocorreu o problema.</div>
-            </div>
-
-            <div>
-              <label>Motivo / Origem</label>
-              <select name="motivo">
-                <option value="IVPLAST">IVPLAST</option>
-                <option value="Cliente">Cliente</option>
-                <option value="Transportadora">Transportadora</option>
-                <option value="Vendedor">Vendedor</option>
-              </select>
-            </div>
+          <div>
+            <label>Anexos</label>
+            <input type="file" name="anexos" multiple>
           </div>
+        </div>
 
-          <div class="grid3" style="margin-top:14px">
-            <div>
-              <label>Responsável</label>
-              <select name="responsavel">
-                <option value="Atendimento">Atendimento</option>
-                <option value="Comercial">Comercial</option>
-                <option value="Qualidade">Qualidade</option>
-                <option value="Logística">Logística</option>
-                <option value="Financeiro">Financeiro</option>
-                <option value="Diretoria">Diretoria</option>
-              </select>
-            </div>
+        <div class="section">Cliente já emitiu NFD?</div>
+        <div class="grid">
+          <div class="radioRow">
+            <label><input type="radio" name="cliente_emitiu_nfd" value="nao" checked> Não</label>
+            <label><input type="radio" name="cliente_emitiu_nfd" value="sim"> Sim</label>
+          </div>
+          <div>
+            <label>Número da NFD</label>
+            <input id="nfd" name="nfd_numero" disabled>
+          </div>
+        </div>
 
-  
-            <% if (canSeeCost) { %>
-              <div>
-                <label>Custo estimado (R$)</label>
-                <input name="custo_estimado" placeholder="0,00" />
-                <div class="hint">Visível somente para Financeiro/Diretoria.</div>
+        <div class="section">Algum item foi errado?</div>
+        <div class="grid">
+          <div class="radioRow">
+            <label><input type="radio" name="item_errado" value="nao" checked> Não</label>
+            <label><input type="radio" name="item_errado" value="sim"> Sim</label>
+          </div>
+          <div>
+            <label>Item (código / descrição)</label>
+            <input id="item" name="item_descricao" disabled>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div>
+            <label>Quantidade</label>
+            <input id="qtd" name="item_quantidade" disabled>
+          </div>
+          <div>
+            <label>Observações</label>
+            <input name="item_obs">
+          </div>
+        </div>
+
+        <div class="section">Descrição</div>
+        <textarea name="descricao" required></textarea>
+
+        <div class="actions">
+          <a class="btn" href="/ocorrencias">Cancelar</a>
+          <button class="btn primary" type="submit">Salvar ocorrência</button>
+        </div>
+      </form>
+    </div>
+  </main>
+</div>
+
+<script>
+  function toggleNFD(){
+    const sim=document.querySelector('input[name="cliente_emitiu_nfd"][value="sim"]').checked;
+    document.getElementById("nfd").disabled=!sim;
+  }
+  function toggleItem(){
+    const sim=document.querySelector('input[name="item_errado"][value="sim"]').checked;
+    document.getElementById("item").disabled=!sim;
+    document.getElementById("qtd").disabled=!sim;
+  }
+  document.querySelectorAll('input[name="cliente_emitiu_nfd"]').forEach(e=>e.addEventListener("change",toggleNFD));
+  document.querySelectorAll('input[name="item_errado"]').forEach(e=>e.addEventListener("change",toggleItem));
+</script>
+
+</body>
+</html>
