@@ -1,1 +1,85 @@
-<h1>Auditoria (Diretoria)</h1>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>IVPLAST | Auditoria</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body{background:#f3f5f7;}
+    .app{display:flex;min-height:100vh;}
+    .sidebar{width:260px;background:#fff;border-right:1px solid #e9ecef;padding:18px 14px;position:sticky;top:0;height:100vh;}
+    .nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;color:#344054;text-decoration:none;}
+    .nav a:hover{background:#f2f4f7;}
+    .nav a.active{background:#e8f2ff;color:#0b5ed7;font-weight:600;}
+    .content{flex:1;padding:22px;}
+    .panel{border:0;border-radius:14px;box-shadow:0 8px 22px rgba(0,0,0,.06);}
+    .topbar{background:#fff;border:1px solid #e9ecef;border-radius:14px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.04);margin-bottom:18px;}
+  </style>
+</head>
+<body>
+<%
+  const logs = (typeof auditoria !== 'undefined' && auditoria && auditoria.length) ? auditoria : [
+    { quando:"2026-02-03 10:22", usuario:"Raphael", acao:"Criou ocorrência", alvo:"#11024" },
+    { quando:"2026-02-03 11:10", usuario:"Atendimento", acao:"Alterou status", alvo:"#11024 (Em andamento)" },
+    { quando:"2026-02-03 13:40", usuario:"Raphael", acao:"Comentário", alvo:"#11024" }
+  ];
+%>
+<div class="app">
+  <aside class="sidebar">
+    <div class="d-flex align-items-center gap-2 px-2 mb-3">
+      <img src="https://dummyimage.com/120x34/ffffff/1177cc.png&text=IVPLAST" style="height:34px;" alt="IVPLAST">
+      <div>
+        <div class="fw-semibold">IVPLAST</div>
+        <div class="small text-secondary">Ocorrências</div>
+      </div>
+    </div>
+    <div class="nav flex-column">
+      <a href="/dashboard">🏠 Menu Principal</a>
+      <a href="/novo">➕ Novo</a>
+      <a href="/ocorrencias">🔎 Busca por Ocorrência</a>
+      <a href="/relatorios">📊 Relatórios</a>
+      <a href="/configuracoes">⚙️ Configurações</a>
+      <a class="active" href="/auditoria">🧾 Auditoria</a>
+      <hr class="my-2"/>
+      <a href="/logout">🚪 Sair</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="topbar">
+      <div class="fw-semibold">Auditoria</div>
+      <div class="small text-secondary">Registro de ações no sistema.</div>
+    </div>
+
+    <div class="card panel">
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>Data/Hora</th>
+                <th>Usuário</th>
+                <th>Ação</th>
+                <th>Alvo</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% logs.forEach(l => { %>
+                <tr>
+                  <td><%= l.quando %></td>
+                  <td><%= l.usuario %></td>
+                  <td><%= l.acao %></td>
+                  <td><%= l.alvo %></td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>
