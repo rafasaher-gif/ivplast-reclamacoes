@@ -45,6 +45,15 @@
     .k{font-size:12px;color:#64748b}
     .v{font-size:14px;font-weight:700;color:#0f172a}
     .kv{display:flex;flex-direction:column;gap:2px}
+
+    /* cards de itens */
+    .itemCard{
+      border:1px solid #e5e7eb;
+      border-radius:10px;
+      padding:10px;
+      background:#fff;
+    }
+
     @media(max-width:900px){
       .sidebar{display:none}
       .grid,.grid3{grid-template-columns:1fr}
@@ -73,10 +82,13 @@
 
   <main class="content">
 
-    <% 
+    <%
       const role = String((usuario && usuario.role) ? usuario.role : "").toLowerCase();
       const canSeeCost = ["admin","financeiro","diretoria"].includes(role);
       const st = String(ocorrencia.status || "Aberto").toLowerCase();
+
+      // Ajuste de texto: motivo IVPLAST exibe "Fábrica"
+      const motivoLabel = (String(ocorrencia.motivo || "") === "IVPLAST") ? "Fábrica" : (ocorrencia.motivo || "-");
     %>
 
     <div class="top">
@@ -112,12 +124,12 @@
 
         <div class="grid3">
           <div class="kv">
-            <div class="k">Empresa do problema</div>
+            <div class="k">Faturado por</div>
             <div class="v"><%= ocorrencia.empresa || "-" %></div>
           </div>
           <div class="kv">
             <div class="k">Motivo / Origem</div>
-            <div class="v"><%= ocorrencia.motivo || "-" %></div>
+            <div class="v"><%= motivoLabel %></div>
           </div>
           <div class="kv">
             <div class="k">Responsável</div>
@@ -144,25 +156,26 @@
 
         <div class="line"></div>
 
-        <div class="grid3">
-          <div class="kv">
-            <div class="k">Item errado?</div>
-            <div class="v"><%= (ocorrencia.item_errado ? "Sim" : "Não") %></div>
-          </div>
-          <div class="kv">
-            <div class="k">Item</div>
-            <div class="v"><%= ocorrencia.item_descricao || "-" %></div>
-          </div>
-          <div class="kv">
-            <div class="k">Quantidade</div>
-            <div class="v"><%= (ocorrencia.item_quantidade !== undefined && ocorrencia.item_quantidade !== null) ? ocorrencia.item_quantidade : "-" %></div>
-          </div>
-        </div>
+        <!-- ✅ Itens (multi) -->
+        <div class="section" style="margin-top:0">Itens errados</div>
 
-        <div style="margin-top:10px">
-          <div class="k">Observação do item</div>
-          <div class="v" style="font-size:13px;font-weight:600"><%= ocorrencia.item_obs || "-" %></div>
-        </div>
+        <% if (!itens || itens.length === 0) { %>
+          <div class="muted">Nenhum item informado.</div>
+        <% } else { %>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <% itens.forEach((it, idx) => { %>
+              <div class="itemCard">
+                <div class="k">Item <%= idx + 1 %></div>
+                <div class="v" style="font-size:14px;"><%= it.descricao %></div>
+
+                <div style="margin-top:6px">
+                  <div class="k">Quantidade</div>
+                  <div class="v" style="font-size:14px;"><%= (it.quantidade !== null && it.quantidade !== undefined) ? it.quantidade : "-" %></div>
+                </div>
+              </div>
+            <% }) %>
+          </div>
+        <% } %>
 
         <% if (canSeeCost) { %>
           <div class="line"></div>
@@ -247,3 +260,4 @@
 </div>
 </body>
 </html>
+
