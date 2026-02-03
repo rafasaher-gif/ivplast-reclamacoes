@@ -560,8 +560,17 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 });
 
 app.get("/novo", requireAuth, (req, res) => {
-  res.render("novo", { usuario: req.session.user, error: null, success: null });
+  const role = String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
+  const canSeeCost = ["admin", "financeiro", "diretoria"].includes(role);
+
+  res.render("novo", {
+    usuario: req.session.user,
+    canSeeCost,
+    error: null,
+    success: null
+  });
 });
+
 
 app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   try {
