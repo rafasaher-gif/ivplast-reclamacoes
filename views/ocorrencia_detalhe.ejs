@@ -1,1 +1,162 @@
-<h1>Detalhe da Ocorrência</h1>
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>IVPLAST | Detalhe da Ocorrência</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body{background:#f3f5f7;}
+    .app{display:flex;min-height:100vh;}
+    .sidebar{width:260px;background:#fff;border-right:1px solid #e9ecef;padding:18px 14px;position:sticky;top:0;height:100vh;}
+    .nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;color:#344054;text-decoration:none;}
+    .nav a:hover{background:#f2f4f7;}
+    .nav a.active{background:#e8f2ff;color:#0b5ed7;font-weight:600;}
+    .content{flex:1;padding:22px;}
+    .panel{border:0;border-radius:14px;box-shadow:0 8px 22px rgba(0,0,0,.06);}
+    .topbar{background:#fff;border:1px solid #e9ecef;border-radius:14px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.04);margin-bottom:18px;}
+    .btn-primary{background:#1177cc;border-color:#1177cc;}
+    .timeline{border-left:2px solid #e9ecef;padding-left:14px;}
+    .dot{width:10px;height:10px;border-radius:50%;background:#1177cc;display:inline-block;margin-left:-20px;margin-right:10px;}
+    .muted{color:#667085;}
+  </style>
+</head>
+<body>
+<%
+  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Raphael" };
+  const o = (typeof ocorrencia !== 'undefined' && ocorrencia) ? ocorrencia : {
+    id: (typeof id !== 'undefined' ? id : 11024),
+    cliente: "LIMA E SILVA COMERCIAL LTDA",
+    criadoEm: "2026-02-03",
+    status: "Em andamento",
+    motivo: "Cliente",
+    tipo: "Comercial",
+    pedido: "224483",
+    nf: "13052",
+    custo: 350.00,
+    responsavel: "Atendimento",
+    descricao: "Exemplo de descrição da ocorrência. Aqui entra todo o texto do ocorrido.",
+    atividades: [
+      { quando:"há 2 dias", quem:"Sistema", texto:"Ocorrência criada." },
+      { quando:"há 1 dia", quem:"Atendimento", texto:"Solicitado evidências (fotos/prints)." }
+    ]
+  };
+%>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="d-flex align-items-center gap-2 px-2 mb-3">
+      <img src="https://dummyimage.com/120x34/ffffff/1177cc.png&text=IVPLAST" style="height:34px;" alt="IVPLAST">
+      <div>
+        <div class="fw-semibold">IVPLAST</div>
+        <div class="small text-secondary">Ocorrências</div>
+      </div>
+    </div>
+    <div class="nav flex-column">
+      <a href="/dashboard">🏠 Menu Principal</a>
+      <a href="/novo">➕ Novo</a>
+      <a class="active" href="/ocorrencias">🔎 Busca por Ocorrência</a>
+      <a href="/relatorios">📊 Relatórios</a>
+      <a href="/configuracoes">⚙️ Configurações</a>
+      <a href="/auditoria">🧾 Auditoria</a>
+      <hr class="my-2"/>
+      <a href="/logout">🚪 Sair</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="topbar d-flex justify-content-between align-items-center">
+      <div>
+        <div class="small text-secondary">Menu Principal / Ocorrências / #<%= o.id %></div>
+        <div class="fw-semibold"><%= o.cliente %></div>
+        <div class="small muted">Criado em <%= o.criadoEm %> • Pedido <%= o.pedido %> • NF <%= o.nf %></div>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <% if (o.status === "Aberto") { %>
+          <span class="badge text-bg-danger">Aberto</span>
+        <% } else if (o.status === "Resolvido") { %>
+          <span class="badge text-bg-success">Resolvido</span>
+        <% } else { %>
+          <span class="badge text-bg-warning">Em andamento</span>
+        <% } %>
+        <a class="btn btn-outline-secondary btn-sm" href="/ocorrencias">Voltar</a>
+      </div>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-lg-7">
+        <div class="card panel">
+          <div class="card-body">
+            <div class="fw-semibold mb-2">Detalhes</div>
+
+            <div class="row g-2 small">
+              <div class="col-md-6"><span class="text-secondary">Tipo:</span> <b><%= o.tipo %></b></div>
+              <div class="col-md-6"><span class="text-secondary">Motivo:</span> <b><%= o.motivo %></b></div>
+              <div class="col-md-6"><span class="text-secondary">Responsável:</span> <b><%= o.responsavel %></b></div>
+              <div class="col-md-6"><span class="text-secondary">Custo estimado:</span> <b>R$ <%= Number(o.custo||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) %></b></div>
+            </div>
+
+            <hr/>
+            <div class="fw-semibold mb-1">Descrição</div>
+            <div class="text-secondary"><%= o.descricao %></div>
+
+            <hr/>
+            <div class="fw-semibold mb-2">Ações rápidas</div>
+
+            <form method="POST" action="/ocorrencias/<%= o.id %>/atualizar" class="row g-2">
+              <div class="col-md-4">
+                <select name="status" class="form-select form-select-sm">
+                  <option value="Aberto" <%= o.status==="Aberto" ? "selected":"" %>>Aberto</option>
+                  <option value="Em andamento" <%= o.status==="Em andamento" ? "selected":"" %>>Em andamento</option>
+                  <option value="Resolvido" <%= o.status==="Resolvido" ? "selected":"" %>>Resolvido</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <select name="responsavel" class="form-select form-select-sm">
+                  <option value="Atendimento" <%= o.responsavel==="Atendimento" ? "selected":"" %>>Atendimento</option>
+                  <option value="Logistica" <%= o.responsavel==="Logistica" ? "selected":"" %>>Logística</option>
+                  <option value="Compras" <%= o.responsavel==="Compras" ? "selected":"" %>>Compras</option>
+                  <option value="Qualidade" <%= o.responsavel==="Qualidade" ? "selected":"" %>>Qualidade</option>
+                  <option value="Diretoria" <%= o.responsavel==="Diretoria" ? "selected":"" %>>Diretoria</option>
+                </select>
+              </div>
+              <div class="col-md-4 d-grid">
+                <button class="btn btn-primary btn-sm" type="submit">Salvar alteração</button>
+              </div>
+            </form>
+
+            <form method="POST" action="/ocorrencias/<%= o.id %>/comentario" class="mt-3">
+              <label class="form-label small">Adicionar comentário</label>
+              <textarea name="comentario" class="form-control" rows="3" placeholder="Descreva a atualização..."></textarea>
+              <button class="btn btn-outline-primary btn-sm mt-2" type="submit">Adicionar</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-5">
+        <div class="card panel">
+          <div class="card-body">
+            <div class="fw-semibold mb-2">Histórico</div>
+            <div class="timeline">
+              <% (o.atividades || []).forEach(a => { %>
+                <div class="mb-3">
+                  <div class="small">
+                    <span class="dot"></span>
+                    <b><%= a.quem %></b> <span class="text-secondary">• <%= a.quando %></span>
+                  </div>
+                  <div class="text-secondary small ms-1"><%= a.texto %></div>
+                </div>
+              <% }) %>
+            </div>
+            <div class="small muted mt-2">Logado como <b><%= user.nome %></b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>
+
