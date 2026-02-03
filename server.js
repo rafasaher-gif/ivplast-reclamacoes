@@ -1,39 +1,13 @@
 /**
  * server.js — IVPLAST Reclamações (Express + EJS + Sessão + Postgres opcional)
  *
- * ✅ Rotas:
- *  - GET  /                 -> index.ejs
- *  - GET  /login            -> login.ejs
- *  - POST /login
- *  - GET  /register         -> register.ejs
- *  - POST /register
- *  - GET  /logout
- *
- *  - GET  /dashboard        -> dashboard.ejs
- *  - GET  /ocorrencias      -> ocorrencias.ejs (lista + busca)
- *  - GET  /novo             -> novo.ejs
- *  - POST /novo             -> cria ocorrência (com anexos opcional)
- *  - GET  /ocorrencias/:id  -> ocorrencia_detalhe.ejs
- *  - POST /ocorrencias/:id/atualizar
- *  - POST /ocorrencias/:id/comentario
- *
- *  - GET  /relatorios       -> relatorios.ejs
- *  - GET  /configuracoes    -> configuracoes.ejs
- *  - POST /configuracoes/admin
- *  - POST /configuracoes/senha
- *  - GET  /auditoria        -> auditoria.ejs
- *
- * ✅ Modos:
- *  - Com Postgres (Render): use DATABASE_URL e (opcional) DATABASE_SSL=true
- *  - Sem Postgres: modo "mock" (em memória)
- *
  * Dependências:
  *   npm i express ejs express-session bcryptjs pg multer
  *
- * Variáveis de ambiente (Render):
+ * ENV (Render):
  *   SESSION_SECRET=...
- *   DATABASE_URL=postgres://...   (opcional)
- *   DATABASE_SSL=true            (opcional)
+ *   DATABASE_URL=postgres://...
+ *   DATABASE_SSL=true
  *   ADMIN_EMAIL=...
  *   ADMIN_NAME=...
  *   ADMIN_PASSWORD=...
@@ -46,7 +20,6 @@ const session = require("express-session");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
 
-// Postgres opcional
 let pg;
 try {
   pg = require("pg");
@@ -61,12 +34,11 @@ const app = express();
 ----------------------------- */
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 /* -----------------------------
-   Uploads (anexos)
+   Uploads
 ----------------------------- */
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -94,18 +66,14 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: false, // se usar HTTPS atrás de proxy, veja a dica abaixo
-      maxAge: 1000 * 60 * 60 * 12, // 12h
+      secure: false,
+      maxAge: 1000 * 60 * 60 * 12,
     },
   })
 );
 
-// Se estiver no Render atrás de proxy (HTTPS), você pode habilitar isto e setar secure true:
-// app.set("trust proxy", 1);
-// (e também trocar cookie.secure para true)
-
 /* -----------------------------
-   Postgres (se DATABASE_URL existir)
+   Postgres
 ----------------------------- */
 function envBool(v) {
   if (typeof v !== "string") return false;
@@ -129,28 +97,23 @@ if (USE_DB) {
 function isAuthed(req) {
   return req.session && req.session.user && req.session.user.id;
 }
-
 function requireAuth(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
   next();
 }
-
 function nowISO() {
   return new Date().toISOString();
 }
-
 function safeInt(v, fallback = 0) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : fallback;
 }
-
 function safeFloat(v, fallback = 0) {
   if (v === null || v === undefined) return fallback;
   const cleaned = String(v).replace(/\./g, "").replace(",", ".");
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : fallback;
 }
-
 function daysAgoText(dateISO) {
   try {
     const d = new Date(dateISO);
@@ -163,7 +126,6 @@ function daysAgoText(dateISO) {
     return "-";
   }
 }
-
 function hoursBetween(aISO, bISO) {
   const a = new Date(aISO).getTime();
   const b = new Date(bISO).getTime();
@@ -172,7 +134,7 @@ function hoursBetween(aISO, bISO) {
 }
 
 /* -----------------------------
-   MOCK (quando não tem DB)
+   MOCK (sem DB)
 ----------------------------- */
 const mock = {
   users: [],
@@ -186,13 +148,12 @@ const mock = {
 };
 
 function ensureMockAdmin() {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPass = process.env.ADMIN_PASSWORD;
+  const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+  const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
-
   if (!adminEmail || !adminPass) return;
 
-  const exists = mock.users.find((u) => u.email.toLowerCase() === adminEmail.toLowerCase());
+  const exists = mock.users.find((u) => u.email.toLowerCase() === adminEmail);
   if (!exists) {
     const hash = bcrypt.hashSync(adminPass, 10);
     mock.users.push({
@@ -205,11 +166,10 @@ function ensureMockAdmin() {
     });
   }
 }
-
 ensureMockAdmin();
 
 /* -----------------------------
-   Settings + Auditoria helpers (DB/MOCK)
+   Settings/Auditoria (DB/MOCK)
 ----------------------------- */
 async function upsertSetting(key, value) {
   if (!USE_DB) {
@@ -217,10 +177,8 @@ async function upsertSetting(key, value) {
     return;
   }
   await pool.query(
-    `
-    INSERT INTO settings (key,value) VALUES ($1,$2)
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-  `,
+    `INSERT INTO settings (key,value) VALUES ($1,$2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     [key, String(value)]
   );
 }
@@ -228,8 +186,7 @@ async function upsertSetting(key, value) {
 async function getSetting(key, fallback = "") {
   if (!USE_DB) return mock.settings[key] ?? fallback;
   const r = await pool.query(`SELECT value FROM settings WHERE key=$1`, [key]);
-  if (r.rowCount === 0) return fallback;
-  return r.rows[0].value;
+  return r.rowCount ? r.rows[0].value : fallback;
 }
 
 async function auditLog(usuario, acao, alvo) {
@@ -246,43 +203,84 @@ async function auditLog(usuario, acao, alvo) {
 }
 
 /* -----------------------------
-   DB: inicialização (tabelas + migrações)
+   DB: detecção de colunas e migração automática
 ----------------------------- */
+async function getUsersColumns() {
+  const r = await pool.query(
+    `
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'users'
+  `
+  );
+  return new Set(r.rows.map((x) => x.column_name));
+}
+
 async function dbInit() {
   if (!USE_DB) return;
 
-  // 1) Users
+  // 1) Cria tabelas novas (se não existirem)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
-      nome TEXT NOT NULL,
+      nome TEXT,
       email TEXT UNIQUE NOT NULL,
-      senha_hash TEXT NOT NULL,
+      senha_hash TEXT,
       role TEXT NOT NULL DEFAULT 'user',
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
 
-  // ---- MIGRAÇÃO AUTOMÁTICA (compatibilidade com banco antigo) ----
-  // Alguns bancos antigos têm coluna "name" em vez de "nome".
-  // Aqui criamos "nome" se não existir e copiamos dados de "name" quando existir.
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;`);
-
+  // 2) Migra compatibilidade com bancos antigos (name/password_hash)
+  //    Fazemos tudo sem referenciar coluna que pode não existir (usando DO + information_schema).
   await pool.query(`
     DO $$
     BEGIN
+      -- garante coluna nome
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='users' AND column_name='nome'
+      ) THEN
+        EXECUTE 'ALTER TABLE users ADD COLUMN nome TEXT';
+      END IF;
+
+      -- garante coluna senha_hash
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='users' AND column_name='senha_hash'
+      ) THEN
+        EXECUTE 'ALTER TABLE users ADD COLUMN senha_hash TEXT';
+      END IF;
+
+      -- copia name -> nome se existir name
       IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name='users' AND column_name='name'
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='users' AND column_name='name'
       ) THEN
         EXECUTE 'UPDATE users SET nome = COALESCE(nome, name) WHERE nome IS NULL';
       END IF;
+
+      -- copia password_hash -> senha_hash se existir password_hash
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='users' AND column_name='password_hash'
+      ) THEN
+        EXECUTE 'UPDATE users SET senha_hash = COALESCE(senha_hash, password_hash) WHERE senha_hash IS NULL';
+      END IF;
+
+      -- garante role
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='users' AND column_name='role'
+      ) THEN
+        EXECUTE 'ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT ''user''';
+      END IF;
+
     END $$;
   `);
-  // --------------------------------------------------------------
 
-  // 2) Settings
+  // 3) Outras tabelas
   await pool.query(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -290,7 +288,6 @@ async function dbInit() {
     );
   `);
 
-  // 3) Ocorrências
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencias (
       id SERIAL PRIMARY KEY,
@@ -310,7 +307,6 @@ async function dbInit() {
     );
   `);
 
-  // 4) Atividades
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_atividades (
       id SERIAL PRIMARY KEY,
@@ -321,7 +317,6 @@ async function dbInit() {
     );
   `);
 
-  // 5) Anexos
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_anexos (
       id SERIAL PRIMARY KEY,
@@ -334,7 +329,6 @@ async function dbInit() {
     );
   `);
 
-  // 6) Auditoria
   await pool.query(`
     CREATE TABLE IF NOT EXISTS auditoria (
       id SERIAL PRIMARY KEY,
@@ -345,30 +339,74 @@ async function dbInit() {
     );
   `);
 
-  // Seed admin via ENV (se ainda não existir)
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPass = process.env.ADMIN_PASSWORD;
+  // 4) Seed admin via ENV:
+  //    - se não existir, cria
+  //    - se existir e senha_hash estiver vazia, atualiza para a senha do ENV
+  const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+  const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
 
   if (adminEmail && adminPass) {
-    const existing = await pool.query(`SELECT id FROM users WHERE email=$1`, [adminEmail.toLowerCase()]);
+    const cols = await getUsersColumns();
+    const nameCol = cols.has("nome") ? "nome" : (cols.has("name") ? "name" : null);
+    const passCol = cols.has("senha_hash") ? "senha_hash" : (cols.has("password_hash") ? "password_hash" : null);
+
+    const existing = await pool.query(`SELECT id, ${nameCol ? nameCol : "NULL"} as nome, ${passCol ? passCol : "NULL"} as senha_hash FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
+
+    const hash = await bcrypt.hash(adminPass, 10);
+
     if (existing.rowCount === 0) {
-      const hash = await bcrypt.hash(adminPass, 10);
-      await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'admin')`,
-        [adminName, adminEmail.toLowerCase(), hash]
-      );
+      // cria admin novo usando colunas "modernas"
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'admin')`, [
+        adminName,
+        adminEmail,
+        hash,
+      ]);
+    } else {
+      // garante que o admin terá senha_hash preenchida
+      const id = existing.rows[0].id;
+      await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [adminName, id]);
+      await pool.query(`UPDATE users SET senha_hash = COALESCE(senha_hash,$1) WHERE id=$2`, [hash, id]);
+      await pool.query(`UPDATE users SET role = 'admin' WHERE id=$1`, [id]);
     }
   }
 
-  // Defaults de settings
   await upsertSetting("adminEmail", process.env.ADMIN_EMAIL || "");
   await upsertSetting("adminName", process.env.ADMIN_NAME || "");
   await upsertSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)));
 }
 
 /* -----------------------------
-   Middlewares de template
+   Auth: pegar usuário com colunas variáveis
+----------------------------- */
+async function getUserByEmail_DB(emailLower) {
+  const cols = await getUsersColumns();
+
+  const nameCol = cols.has("nome") ? "nome" : (cols.has("name") ? "name" : null);
+  const passCol = cols.has("senha_hash") ? "senha_hash" : (cols.has("password_hash") ? "password_hash" : null);
+  const roleCol = cols.has("role") ? "role" : null;
+
+  if (!passCol) {
+    throw new Error("Tabela users sem coluna de senha (senha_hash/password_hash).");
+  }
+
+  const selectParts = [
+    "id",
+    nameCol ? `${nameCol} AS nome` : `NULL AS nome`,
+    "email",
+    `${passCol} AS senha_hash`,
+    roleCol ? `${roleCol} AS role` : `'user' AS role`,
+  ];
+
+  const r = await pool.query(
+    `SELECT ${selectParts.join(", ")} FROM users WHERE LOWER(email)=$1 LIMIT 1`,
+    [emailLower]
+  );
+  return r.rowCount ? r.rows[0] : null;
+}
+
+/* -----------------------------
+   Middlewares template
 ----------------------------- */
 app.use((req, res, next) => {
   res.locals.usuario = req.session.user || null;
@@ -395,54 +433,19 @@ app.post("/login", async (req, res) => {
     let user = null;
 
     if (USE_DB) {
-      // IMPORTANTE: força retornar "nome" mesmo se banco antigo tiver "name"
-      const r = await pool.query(
-        `
-        SELECT
-          id,
-          COALESCE(nome, NULL) AS nome,
-          email,
-          senha_hash,
-          role
-        FROM users
-        WHERE LOWER(email) = $1
-        LIMIT 1
-      `,
-        [email]
-      );
-      if (r.rowCount > 0) user = r.rows[0];
-
-      // Se por algum motivo nome veio null (banco antigo), tenta pegar "name"
-      if (user && !user.nome) {
-        const r2 = await pool.query(
-          `
-          SELECT id,
-                 (SELECT name FROM users WHERE LOWER(email)=$1 LIMIT 1) AS nome,
-                 email, senha_hash, role
-          FROM users
-          WHERE LOWER(email)=$1
-          LIMIT 1
-        `,
-          [email]
-        );
-        if (r2.rowCount > 0 && r2.rows[0].nome) user.nome = r2.rows[0].nome;
-      }
+      user = await getUserByEmail_DB(email);
     } else {
       user = mock.users.find((u) => u.email.toLowerCase() === email);
     }
 
-    if (!user) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
+    if (!user || !user.senha_hash) {
+      return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
+    }
 
     const ok = await bcrypt.compare(senha, user.senha_hash);
     if (!ok) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
 
-    req.session.user = {
-      id: user.id,
-      nome: user.nome || "Usuário",
-      email: user.email,
-      role: user.role || "user",
-    };
-
+    req.session.user = { id: user.id, nome: user.nome || "Usuário", email: user.email, role: user.role || "user" };
     await auditLog(req.session.user.nome, "Login", `email=${user.email}`);
     return res.redirect("/dashboard");
   } catch (err) {
@@ -507,7 +510,6 @@ app.get("/logout", async (req, res) => {
   req.session.destroy(() => res.redirect("/login"));
 });
 
-// rota usada no login.ejs
 app.get("/esqueci-senha", (req, res) => res.redirect("/login"));
 
 /* -----------------------------
@@ -559,16 +561,14 @@ app.get("/dashboard", requireAuth, async (req, res) => {
       motivos.Vendedor = 2;
     }
 
-    const kpis = {
-      totalOcorrencias: total || 17,
-      abertas: abertas || 2,
-      tempoMedioHoras: tempoMedioHoras || 26,
-      valorEstimado: custoTotal || 35340,
-    };
-
     res.render("dashboard", {
       usuario: req.session.user,
-      kpis,
+      kpis: {
+        totalOcorrencias: total || 17,
+        abertas: abertas || 2,
+        tempoMedioHoras: tempoMedioHoras || 26,
+        valorEstimado: custoTotal || 35340,
+      },
       serieSemanal,
       motivosOcorrencia: motivos,
     });
@@ -602,34 +602,22 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
         situacao: o.status,
       }));
     } else {
-      if (!mock.ocorrencias.length) {
-        lista = [
-          { id: 12484, cliente: "LIMA E SILVA COMERCIAL LTDA", criadoEm: "há 27 dias", ultimaAtividade: "há 73 dias", status: "Aberto", situacao: "Em andamento" },
-          { id: 12483, cliente: "Qtda: ocorrências (exemplo)", criadoEm: "há 27 dias", ultimaAtividade: "há 24 horas", status: "Aberto", situacao: "Em aberto" },
-          { id: 12444, cliente: "Solic. btoer saqns (SS)", criadoEm: "há 27 dias", ultimaAtividade: "há 24 horas", status: "Aberto", situacao: "Em aberto" },
-        ];
-      } else {
-        lista = mock.ocorrencias
-          .slice()
-          .sort((a, b) => b.id - a.id)
-          .slice(0, 200)
-          .map((o) => ({
-            id: o.id,
-            cliente: o.razao_social,
-            criadoEm: daysAgoText(o.created_at),
-            ultimaAtividade: daysAgoText(o.updated_at),
-            status: o.status,
-            situacao: o.status,
-          }));
-      }
+      lista = mock.ocorrencias
+        .slice()
+        .sort((a, b) => b.id - a.id)
+        .slice(0, 200)
+        .map((o) => ({
+          id: o.id,
+          cliente: o.razao_social,
+          criadoEm: daysAgoText(o.created_at),
+          ultimaAtividade: daysAgoText(o.updated_at),
+          status: o.status,
+          situacao: o.status,
+        }));
     }
 
-    if (q) {
-      lista = lista.filter((o) => String(o.cliente).toLowerCase().includes(q) || String(o.id).includes(q));
-    }
-    if (statusFilter) {
-      lista = lista.filter((o) => String(o.status) === statusFilter);
-    }
+    if (q) lista = lista.filter((o) => String(o.cliente).toLowerCase().includes(q) || String(o.id).includes(q));
+    if (statusFilter) lista = lista.filter((o) => String(o.status) === statusFilter);
 
     res.render("ocorrencias", { usuario: req.session.user, ocorrencias: lista, q });
   } catch (err) {
@@ -657,11 +645,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     };
 
     if (!data.razao_social || !data.descricao) {
-      return res.status(400).render("novo", {
-        usuario: req.session.user,
-        error: "Preencha Razão social e Descrição.",
-        success: null,
-      });
+      return res.status(400).render("novo", { usuario: req.session.user, error: "Preencha Razão social e Descrição.", success: null });
     }
 
     let newId = null;
@@ -691,10 +675,11 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
       newId = r.rows[0].id;
 
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [newId, req.session.user.nome, "Ocorrência criada."]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+        newId,
+        req.session.user.nome,
+        "Ocorrência criada.",
+      ]);
 
       const files = req.files || [];
       for (const f of files) {
@@ -705,13 +690,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       }
     } else {
       newId = mock.ocorrencias.length ? Math.max(...mock.ocorrencias.map((o) => o.id)) + 1 : 11000;
-      const files = (req.files || []).map((f) => ({
-        filename: f.filename,
-        originalname: f.originalname,
-        mimetype: f.mimetype,
-        size: f.size,
-      }));
-
       mock.ocorrencias.push({
         id: newId,
         ...data,
@@ -720,7 +698,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         created_at: nowISO(),
         updated_at: nowISO(),
         atividades: [{ quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." }],
-        anexos: files,
+        anexos: (req.files || []).map((f) => ({ filename: f.filename, originalname: f.originalname, mimetype: f.mimetype, size: f.size })),
       });
     }
 
@@ -728,11 +706,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     return res.redirect(`/ocorrencias/${newId}`);
   } catch (err) {
     console.error("NOVO_POST_ERR:", err);
-    return res.status(500).render("novo", {
-      usuario: req.session.user,
-      error: "Erro ao salvar ocorrência.",
-      success: null,
-    });
+    return res.status(500).render("novo", { usuario: req.session.user, error: "Erro ao salvar ocorrência.", success: null });
   }
 });
 
@@ -765,48 +739,25 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         custo: Number(o.custo_estimado || 0),
         responsavel: o.responsavel,
         descricao: o.descricao,
-        atividades: acts.rows.map((a) => ({
-          quando: daysAgoText(a.created_at),
-          quem: a.quem,
-          texto: a.texto,
-        })),
+        atividades: acts.rows.map((a) => ({ quando: daysAgoText(a.created_at), quem: a.quem, texto: a.texto })),
       };
     } else {
       const found = mock.ocorrencias.find((x) => x.id === id);
-      if (!found) {
-        ocorrencia = {
-          id,
-          cliente: "LIMA E SILVA COMERCIAL LTDA",
-          criadoEm: "2026-02-03",
-          status: "Em andamento",
-          motivo: "Cliente",
-          tipo: "Comercial",
-          pedido: "224483",
-          nf: "13052",
-          custo: 350.0,
-          responsavel: "Atendimento",
-          descricao: "Exemplo de descrição da ocorrência.",
-          atividades: [
-            { quando: "há 2 dias", quem: "Sistema", texto: "Ocorrência criada." },
-            { quando: "há 1 dia", quem: "Atendimento", texto: "Solicitado evidências (fotos/prints)." },
-          ],
-        };
-      } else {
-        ocorrencia = {
-          id: found.id,
-          cliente: found.razao_social,
-          criadoEm: (found.created_at || "").slice(0, 10) || "2026-02-03",
-          status: found.status,
-          motivo: found.motivo,
-          tipo: found.tipo,
-          pedido: found.numero_pedido || "-",
-          nf: found.numero_nf || "-",
-          custo: Number(found.custo_estimado || 0),
-          responsavel: found.responsavel,
-          descricao: found.descricao,
-          atividades: (found.atividades || []).map((a) => a),
-        };
-      }
+      if (!found) return res.redirect("/ocorrencias");
+      ocorrencia = {
+        id: found.id,
+        cliente: found.razao_social,
+        criadoEm: (found.created_at || "").slice(0, 10) || "2026-02-03",
+        status: found.status,
+        motivo: found.motivo,
+        tipo: found.tipo,
+        pedido: found.numero_pedido || "-",
+        nf: found.numero_nf || "-",
+        custo: Number(found.custo_estimado || 0),
+        responsavel: found.responsavel,
+        descricao: found.descricao,
+        atividades: found.atividades || [],
+      };
     }
 
     res.render("ocorrencia_detalhe", { usuario: req.session.user, ocorrencia, id });
@@ -825,15 +776,12 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
 
   try {
     if (USE_DB) {
-      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [
-        status,
-        responsavel,
+      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [status, responsavel, id]);
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
         id,
+        req.session.user.nome,
+        `Atualizou: status=${status}, responsável=${responsavel}.`,
       ]);
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [id, req.session.user.nome, `Atualizou: status=${status}, responsável=${responsavel}.`]
-      );
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -841,11 +789,7 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
         o.responsavel = responsavel;
         o.updated_at = nowISO();
         o.atividades = o.atividades || [];
-        o.atividades.unshift({
-          quando: "agora",
-          quem: req.session.user.nome,
-          texto: `Atualizou: status=${status}, responsável=${responsavel}.`,
-        });
+        o.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: `Atualizou: status=${status}, responsável=${responsavel}.` });
       }
     }
 
@@ -866,10 +810,7 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   try {
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET updated_at=NOW() WHERE id=$1`, [id]);
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [id, req.session.user.nome, comentario]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [id, req.session.user.nome, comentario]);
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -900,24 +841,11 @@ app.get("/relatorios", requireAuth, async (req, res) => {
       const params = [];
       let idx = 1;
 
-      if (de) {
-        where.push(`created_at >= $${idx++}`);
-        params.push(`${de} 00:00:00`);
-      }
-      if (ate) {
-        where.push(`created_at <= $${idx++}`);
-        params.push(`${ate} 23:59:59`);
-      }
-      if (motivo) {
-        where.push(`motivo = $${idx++}`);
-        params.push(motivo);
-      }
+      if (de) { where.push(`created_at >= $${idx++}`); params.push(`${de} 00:00:00`); }
+      if (ate) { where.push(`created_at <= $${idx++}`); params.push(`${ate} 23:59:59`); }
+      if (motivo) { where.push(`motivo = $${idx++}`); params.push(motivo); }
 
-      const sql = `
-        SELECT motivo, status, custo_estimado
-        FROM ocorrencias
-        ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      `;
+      const sql = `SELECT motivo, status, custo_estimado FROM ocorrencias ${where.length ? "WHERE " + where.join(" AND ") : ""}`;
       const r = await pool.query(sql, params);
       rows = r.rows;
     } else {
@@ -929,19 +857,13 @@ app.get("/relatorios", requireAuth, async (req, res) => {
     const custoTotal = rows.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0);
 
     const porMotivo = { IVPLAST: 0, Cliente: 0, Transportadora: 0, Vendedor: 0 };
-    rows.forEach((o) => {
-      const m = String(o.motivo || "");
-      if (porMotivo[m] !== undefined) porMotivo[m] += 1;
+    rows.forEach((o) => { const m = String(o.motivo || ""); if (porMotivo[m] !== undefined) porMotivo[m] += 1; });
+
+    res.render("relatorios", {
+      usuario: req.session.user,
+      resumoRelatorio: { abertas: abertas || 2, resolvidas: resolvidas || 15, custoTotal: custoTotal || 35340, porMotivo },
+      de, ate, motivo,
     });
-
-    const resumoRelatorio = {
-      abertas: abertas || 2,
-      resolvidas: resolvidas || 15,
-      custoTotal: custoTotal || 35340,
-      porMotivo,
-    };
-
-    res.render("relatorios", { usuario: req.session.user, resumoRelatorio, de, ate, motivo });
   } catch (err) {
     console.error("RELATORIOS_ERR:", err);
     res.status(500).send("Erro ao carregar relatórios.");
@@ -996,20 +918,10 @@ app.post("/configuracoes/senha", requireAuth, async (req, res) => {
     };
 
     if (!novaSenha || novaSenha.length < 6) {
-      return res.render("configuracoes", {
-        usuario: req.session.user,
-        config,
-        success: null,
-        error: "Senha inválida (mínimo 6 caracteres).",
-      });
+      return res.render("configuracoes", { usuario: req.session.user, config, success: null, error: "Senha inválida (mínimo 6 caracteres)." });
     }
     if (novaSenha !== novaSenha2) {
-      return res.render("configuracoes", {
-        usuario: req.session.user,
-        config,
-        success: null,
-        error: "As senhas não conferem.",
-      });
+      return res.render("configuracoes", { usuario: req.session.user, config, success: null, error: "As senhas não conferem." });
     }
 
     const hash = await bcrypt.hash(novaSenha, 10);
@@ -1053,7 +965,7 @@ app.get("/auditoria", requireAuth, async (req, res) => {
 });
 
 /* -----------------------------
-   Static (uploads)
+   Static
 ----------------------------- */
 app.use("/uploads", express.static(UPLOAD_DIR));
 
@@ -1071,9 +983,7 @@ const PORT = process.env.PORT || 3000;
       console.log("⚠️ Rodando em modo MOCK (sem DATABASE_URL).");
     }
 
-    app.listen(PORT, () => {
-      console.log(`🚀 Server rodando na porta ${PORT}`);
-    });
+    app.listen(PORT, () => console.log(`🚀 Server rodando na porta ${PORT}`));
   } catch (err) {
     console.error("BOOT_ERR:", err);
     process.exit(1);
