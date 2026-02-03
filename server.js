@@ -129,14 +129,6 @@ function hoursBetween(aISO, bISO) {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
   return Math.max(0, Math.round((b - a) / (1000 * 60 * 60)));
 }
-function onlyDigits(str, maxLen) {
-  const d = String(str || "").replace(/\D/g, "");
-  return typeof maxLen === "number" ? d.slice(0, maxLen) : d;
-}
-function roleCanSeeCost(role) {
-  const r = String(role || "").toLowerCase();
-  return ["admin", "financeiro", "diretoria"].includes(r);
-}
 
 /* -----------------------------
    MOCK (sem DB)
@@ -204,7 +196,7 @@ async function auditLog(usuario, acao, alvo) {
 }
 
 /* -----------------------------
-   DB Init + Migração automática (mais robusta)
+   DB Init + Migração automática
 ----------------------------- */
 async function dbInit() {
   if (!USE_DB) return;
@@ -263,7 +255,8 @@ async function dbInit() {
       numero_nf TEXT,
 
       empresa TEXT NOT NULL DEFAULT 'IVPLAST',
-      motivo TEXT NOT NULL DEFAULT 'IVPLAST',
+
+      motivo TEXT NOT NULL,
       descricao TEXT NOT NULL,
 
       cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE,
@@ -279,18 +272,22 @@ async function dbInit() {
     );
   `);
 
-  // Migração/garantias (caso banco seja antigo)
+  // Migração/garantias
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS empresa TEXT NOT NULL DEFAULT 'IVPLAST';`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS motivo TEXT NOT NULL DEFAULT 'IVPLAST';`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS descricao TEXT;`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS nfd_numero TEXT;`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS custo_estimado NUMERIC(14,2) NOT NULL DEFAULT 0;`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS responsavel TEXT NOT NULL DEFAULT 'Atendimento';`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'Aberto';`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS created_by INTEGER;`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();`);
+
+  // ✅ CORREÇÃO DO ERRO: coluna "tipo" (legado) pode existir como NOT NULL no seu DB
+  // 1) Se não existir, cria com default
+  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS tipo TEXT;`);
+
+  // 2) Garante que nunca fique nula
+  await pool.query(`UPDATE ocorrencias SET tipo = COALESCE(tipo, 'Comercial') WHERE tipo IS NULL;`);
+
+  // 3) Garante default (assim INSERT não quebra mesmo se não mandar)
+  await pool.query(`ALTER TABLE ocorrencias ALTER COLUMN tipo SET DEFAULT 'Comercial';`);
+
+  // 4) Se a sua coluna estiver NOT NULL, isso já resolve. Se estiver NULLABLE, melhor ainda.
 
   // Atividades / anexos
   await pool.query(`
@@ -315,21 +312,16 @@ async function dbInit() {
     );
   `);
 
-  // Tabela de itens por ocorrência
+  // Itens por ocorrência
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_itens (
       id SERIAL PRIMARY KEY,
       ocorrencia_id INTEGER REFERENCES ocorrencias(id) ON DELETE CASCADE,
-      descricao TEXT,
+      descricao TEXT NOT NULL,
       quantidade INTEGER,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
-
-  // Garantias de colunas (se por algum motivo foi criada diferente)
-  await pool.query(`ALTER TABLE ocorrencia_itens ADD COLUMN IF NOT EXISTS descricao TEXT;`);
-  await pool.query(`ALTER TABLE ocorrencia_itens ADD COLUMN IF NOT EXISTS quantidade INTEGER;`);
-  await pool.query(`ALTER TABLE ocorrencia_itens ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
 
   // AUDITORIA
   await pool.query(`
@@ -598,7 +590,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 /* -------- /novo (GET) com canSeeCost -------- */
 app.get("/novo", requireAuth, (req, res) => {
   const role = String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
-  const canSeeCost = roleCanSeeCost(role);
+  const canSeeCost = ["admin", "financeiro", "diretoria"].includes(role);
 
   res.render("novo", {
     usuario: req.session.user,
@@ -611,10 +603,6 @@ app.get("/novo", requireAuth, (req, res) => {
 /* -------- /novo (POST) -------- */
 app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   try {
-    const role = String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
-    const canSeeCost = roleCanSeeCost(role);
-
-    // Arrays do form (itens)
     const itensDescricao = []
       .concat(req.body["itens_descricao[]"] || req.body.itens_descricao || [])
       .map(v => String(v || "").trim())
@@ -633,18 +621,26 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       numero_nf: String(req.body.numero_nf || "").trim(),
 
       empresa: String(req.body.empresa || "IVPLAST").trim(),
-      motivo: String(req.body.motivo || "IVPLAST").trim() || "IVPLAST",
+      motivo: String(req.body.motivo || "IVPLAST").trim(),
 
       cliente_emitiu_nfd: String(req.body.cliente_emitiu_nfd || "nao") === "sim",
       nfd_numero: String(req.body.nfd_numero || "").trim(),
 
+      // ✅ FIX: "tipo" é legado no banco (NOT NULL). Como você removeu do formulário,
+      // a gente fixa um valor padrão no backend:
+      tipo: "Comercial",
+
       descricao: String(req.body.descricao || "").trim(),
+      custo_estimado: safeFloat(req.body.custo_estimado, 0),
       responsavel: String(req.body.responsavel || "Atendimento").trim(),
     };
 
     const item_obs = String(req.body.item_obs || "").trim();
 
     if (!data.razao_social || !data.descricao) {
+      const role = String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
+      const canSeeCost = ["admin", "financeiro", "diretoria"].includes(role);
+
       return res.status(400).render("novo", {
         usuario: req.session.user,
         canSeeCost,
@@ -653,20 +649,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       });
     }
 
-    // NFD: se marcou "não", limpa. Se marcou "sim", força 10 dígitos.
-    if (!data.cliente_emitiu_nfd) {
-      data.nfd_numero = "";
-    } else {
-      data.nfd_numero = onlyDigits(data.nfd_numero, 10);
-    }
-
-    // Custo: só salva se puder ver (admin/financeiro/diretoria)
-    let custo_estimado = 0;
-    if (canSeeCost) {
-      custo_estimado = safeFloat(req.body.custo_estimado, 0);
-      if (custo_estimado < 0) custo_estimado = 0;
-      if (custo_estimado > 100000) custo_estimado = 100000;
-    }
+    if (!data.cliente_emitiu_nfd) data.nfd_numero = "";
 
     let newId = null;
 
@@ -675,14 +658,14 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         `
         INSERT INTO ocorrencias
           (razao_social, cnpj, numero_pedido, numero_nf,
-           empresa, motivo, descricao,
+           empresa, motivo, tipo, descricao,
            cliente_emitiu_nfd, nfd_numero,
            custo_estimado, responsavel, status, created_by)
         VALUES
           ($1,$2,$3,$4,
-           $5,$6,$7,
-           $8,$9,
-           $10,$11,'Aberto',$12)
+           $5,$6,$7,$8,
+           $9,$10,
+           $11,$12,'Aberto',$13)
         RETURNING id
       `,
         [
@@ -693,12 +676,13 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
           data.empresa,
           data.motivo,
+          data.tipo,          // ✅ aqui
           data.descricao,
 
           data.cliente_emitiu_nfd,
           data.nfd_numero || null,
 
-          custo_estimado,
+          data.custo_estimado,
           data.responsavel,
           req.session.user.id,
         ]
@@ -711,15 +695,13 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         [newId, req.session.user.nome, "Ocorrência criada."]
       );
 
-      // Salvar itens (máx 10) + limite qtd 1..10000
       if (itemErrado) {
         const max = Math.min(10, itensDescricao.length);
 
         for (let i = 0; i < max; i++) {
-          const desc = String(itensDescricao[i] || "").trim();
-          if (!desc) continue;
+          const desc = itensDescricao[i];
 
-          let qtd = parseInt(String(itensQuantidadeRaw[i] || "").replace(/\D/g, ""), 10);
+          let qtd = parseInt(itensQuantidadeRaw[i] || "", 10);
           if (!Number.isFinite(qtd)) qtd = null;
           if (qtd !== null) {
             if (qtd < 1) qtd = 1;
@@ -753,7 +735,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       mock.ocorrencias.push({
         id: newId,
         ...data,
-        custo_estimado,
         status: "Aberto",
         created_by: req.session.user.id,
         created_at: nowISO(),
