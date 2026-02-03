@@ -1,7 +1,7 @@
 /**
  * server.js — IVPLAST Reclamações (Express + EJS + Sessão + Postgres opcional)
  *
- * ✅ Rotas entregues (as mesmas dos seus .ejs):
+ * ✅ Rotas:
  *  - GET  /                 -> index.ejs
  *  - GET  /login            -> login.ejs
  *  - POST /login
@@ -23,19 +23,17 @@
  *  - POST /configuracoes/senha
  *  - GET  /auditoria        -> auditoria.ejs
  *
- * ✅ Modos de funcionamento:
+ * ✅ Modos:
  *  - Com Postgres (Render): use DATABASE_URL e (opcional) DATABASE_SSL=true
- *  - Sem Postgres: entra em modo "mock" (dados em memória) e funciona igual para testar UI.
+ *  - Sem Postgres: modo "mock" (em memória)
  *
- * Dependências (instale no seu projeto):
+ * Dependências:
  *   npm i express ejs express-session bcryptjs pg multer
  *
  * Variáveis de ambiente (Render):
  *   SESSION_SECRET=...
- *   DATABASE_URL=postgres://...
- *   DATABASE_SSL=true   (opcional)
- *
- * Admin inicial via ENV (opcional):
+ *   DATABASE_URL=postgres://...   (opcional)
+ *   DATABASE_SSL=true            (opcional)
  *   ADMIN_EMAIL=...
  *   ADMIN_NAME=...
  *   ADMIN_PASSWORD=...
@@ -67,7 +65,9 @@ app.set("views", path.join(__dirname, "views"));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Pasta para anexos (local)
+/* -----------------------------
+   Uploads (anexos)
+----------------------------- */
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -75,7 +75,7 @@ const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, UPLOAD_DIR),
     filename: (req, file, cb) => {
-      const safe = file.originalname.replace(/[^\w.\-]+/g, "_");
+      const safe = String(file.originalname || "arquivo").replace(/[^\w.\-]+/g, "_");
       cb(null, `${Date.now()}_${safe}`);
     },
   }),
@@ -94,26 +94,26 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: false, // no Render com HTTPS você pode setar true se estiver atrás do proxy e configurar trust proxy
+      secure: false, // se usar HTTPS atrás de proxy, veja a dica abaixo
       maxAge: 1000 * 60 * 60 * 12, // 12h
     },
   })
 );
 
-// Se estiver no Render atrás de proxy (HTTPS), descomente:
+// Se estiver no Render atrás de proxy (HTTPS), você pode habilitar isto e setar secure true:
 // app.set("trust proxy", 1);
+// (e também trocar cookie.secure para true)
 
 /* -----------------------------
    Postgres (se DATABASE_URL existir)
 ----------------------------- */
-const USE_DB = !!process.env.DATABASE_URL && !!pg;
-
-let pool = null;
-
 function envBool(v) {
   if (typeof v !== "string") return false;
   return ["true", "1", "yes", "y", "on"].includes(v.toLowerCase().trim());
 }
+
+const USE_DB = !!process.env.DATABASE_URL && !!pg;
+let pool = null;
 
 if (USE_DB) {
   const sslEnabled = envBool(process.env.DATABASE_SSL);
@@ -139,11 +139,6 @@ function nowISO() {
   return new Date().toISOString();
 }
 
-function toBRL(n) {
-  const v = Number(n || 0);
-  return v.toLocaleString("pt-BR", { minimumFractionDigits: 2 });
-}
-
 function safeInt(v, fallback = 0) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : fallback;
@@ -151,7 +146,7 @@ function safeInt(v, fallback = 0) {
 
 function safeFloat(v, fallback = 0) {
   if (v === null || v === undefined) return fallback;
-  const cleaned = String(v).replace(/\./g, "").replace(",", "."); // "1.234,56" -> "1234.56"
+  const cleaned = String(v).replace(/\./g, "").replace(",", ".");
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -214,103 +209,8 @@ function ensureMockAdmin() {
 ensureMockAdmin();
 
 /* -----------------------------
-   DB: inicialização (tabelas)
+   Settings + Auditoria helpers (DB/MOCK)
 ----------------------------- */
-async function dbInit() {
-  if (!USE_DB) return;
-
-  // Tabelas simples (sem migration)
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      nome TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      senha_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user',
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ocorrencias (
-      id SERIAL PRIMARY KEY,
-      razao_social TEXT NOT NULL,
-      cnpj TEXT,
-      numero_pedido TEXT,
-      numero_nf TEXT,
-      tipo TEXT NOT NULL,
-      motivo TEXT NOT NULL,
-      descricao TEXT NOT NULL,
-      custo_estimado NUMERIC(14,2) NOT NULL DEFAULT 0,
-      responsavel TEXT NOT NULL DEFAULT 'Atendimento',
-      status TEXT NOT NULL DEFAULT 'Aberto',
-      created_by INTEGER REFERENCES users(id),
-      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ocorrencia_atividades (
-      id SERIAL PRIMARY KEY,
-      ocorrencia_id INTEGER REFERENCES ocorrencias(id) ON DELETE CASCADE,
-      quem TEXT NOT NULL,
-      texto TEXT NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ocorrencia_anexos (
-      id SERIAL PRIMARY KEY,
-      ocorrencia_id INTEGER REFERENCES ocorrencias(id) ON DELETE CASCADE,
-      filename TEXT NOT NULL,
-      originalname TEXT NOT NULL,
-      mimetype TEXT,
-      size INTEGER,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS auditoria (
-      id SERIAL PRIMARY KEY,
-      quando TIMESTAMP NOT NULL DEFAULT NOW(),
-      usuario TEXT NOT NULL,
-      acao TEXT NOT NULL,
-      alvo TEXT NOT NULL
-    );
-  `);
-
-  // Seed admin se vier por ENV
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPass = process.env.ADMIN_PASSWORD;
-  const adminName = process.env.ADMIN_NAME || "Admin";
-
-  if (adminEmail && adminPass) {
-    const existing = await pool.query(`SELECT id FROM users WHERE email=$1`, [adminEmail]);
-    if (existing.rowCount === 0) {
-      const hash = await bcrypt.hash(adminPass, 10);
-      await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'admin')`,
-        [adminName, adminEmail, hash]
-      );
-    }
-  }
-
-  // settings defaults
-  await upsertSetting("adminEmail", process.env.ADMIN_EMAIL || "");
-  await upsertSetting("adminName", process.env.ADMIN_NAME || "");
-  await upsertSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)));
-}
-
 async function upsertSetting(key, value) {
   if (!USE_DB) {
     mock.settings[key] = value;
@@ -334,16 +234,143 @@ async function getSetting(key, fallback = "") {
 
 async function auditLog(usuario, acao, alvo) {
   if (!USE_DB) {
-    mock.auditoria.unshift({ quando: new Date().toISOString().slice(0, 16).replace("T", " "), usuario, acao, alvo });
+    mock.auditoria.unshift({
+      quando: new Date().toISOString().slice(0, 16).replace("T", " "),
+      usuario,
+      acao,
+      alvo,
+    });
     return;
   }
   await pool.query(`INSERT INTO auditoria (usuario,acao,alvo) VALUES ($1,$2,$3)`, [usuario, acao, alvo]);
 }
 
 /* -----------------------------
+   DB: inicialização (tabelas + migrações)
+----------------------------- */
+async function dbInit() {
+  if (!USE_DB) return;
+
+  // 1) Users
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      nome TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      senha_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // ---- MIGRAÇÃO AUTOMÁTICA (compatibilidade com banco antigo) ----
+  // Alguns bancos antigos têm coluna "name" em vez de "nome".
+  // Aqui criamos "nome" se não existir e copiamos dados de "name" quando existir.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;`);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name='users' AND column_name='name'
+      ) THEN
+        EXECUTE 'UPDATE users SET nome = COALESCE(nome, name) WHERE nome IS NULL';
+      END IF;
+    END $$;
+  `);
+  // --------------------------------------------------------------
+
+  // 2) Settings
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+
+  // 3) Ocorrências
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ocorrencias (
+      id SERIAL PRIMARY KEY,
+      razao_social TEXT NOT NULL,
+      cnpj TEXT,
+      numero_pedido TEXT,
+      numero_nf TEXT,
+      tipo TEXT NOT NULL,
+      motivo TEXT NOT NULL,
+      descricao TEXT NOT NULL,
+      custo_estimado NUMERIC(14,2) NOT NULL DEFAULT 0,
+      responsavel TEXT NOT NULL DEFAULT 'Atendimento',
+      status TEXT NOT NULL DEFAULT 'Aberto',
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // 4) Atividades
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ocorrencia_atividades (
+      id SERIAL PRIMARY KEY,
+      ocorrencia_id INTEGER REFERENCES ocorrencias(id) ON DELETE CASCADE,
+      quem TEXT NOT NULL,
+      texto TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // 5) Anexos
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ocorrencia_anexos (
+      id SERIAL PRIMARY KEY,
+      ocorrencia_id INTEGER REFERENCES ocorrencias(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      originalname TEXT NOT NULL,
+      mimetype TEXT,
+      size INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // 6) Auditoria
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS auditoria (
+      id SERIAL PRIMARY KEY,
+      quando TIMESTAMP NOT NULL DEFAULT NOW(),
+      usuario TEXT NOT NULL,
+      acao TEXT NOT NULL,
+      alvo TEXT NOT NULL
+    );
+  `);
+
+  // Seed admin via ENV (se ainda não existir)
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPass = process.env.ADMIN_PASSWORD;
+  const adminName = process.env.ADMIN_NAME || "Admin";
+
+  if (adminEmail && adminPass) {
+    const existing = await pool.query(`SELECT id FROM users WHERE email=$1`, [adminEmail.toLowerCase()]);
+    if (existing.rowCount === 0) {
+      const hash = await bcrypt.hash(adminPass, 10);
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'admin')`,
+        [adminName, adminEmail.toLowerCase(), hash]
+      );
+    }
+  }
+
+  // Defaults de settings
+  await upsertSetting("adminEmail", process.env.ADMIN_EMAIL || "");
+  await upsertSetting("adminName", process.env.ADMIN_NAME || "");
+  await upsertSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)));
+}
+
+/* -----------------------------
    Middlewares de template
 ----------------------------- */
-app.use(async (req, res, next) => {
+app.use((req, res, next) => {
   res.locals.usuario = req.session.user || null;
   next();
 });
@@ -351,9 +378,7 @@ app.use(async (req, res, next) => {
 /* -----------------------------
    Rotas públicas
 ----------------------------- */
-app.get("/", (req, res) => {
-  res.render("index");
-});
+app.get("/", (req, res) => res.render("index"));
 
 app.get("/login", (req, res) => {
   if (isAuthed(req)) return res.redirect("/dashboard");
@@ -370,8 +395,38 @@ app.post("/login", async (req, res) => {
     let user = null;
 
     if (USE_DB) {
-      const r = await pool.query(`SELECT id,nome,email,senha_hash,role FROM users WHERE email=$1`, [email]);
+      // IMPORTANTE: força retornar "nome" mesmo se banco antigo tiver "name"
+      const r = await pool.query(
+        `
+        SELECT
+          id,
+          COALESCE(nome, NULL) AS nome,
+          email,
+          senha_hash,
+          role
+        FROM users
+        WHERE LOWER(email) = $1
+        LIMIT 1
+      `,
+        [email]
+      );
       if (r.rowCount > 0) user = r.rows[0];
+
+      // Se por algum motivo nome veio null (banco antigo), tenta pegar "name"
+      if (user && !user.nome) {
+        const r2 = await pool.query(
+          `
+          SELECT id,
+                 (SELECT name FROM users WHERE LOWER(email)=$1 LIMIT 1) AS nome,
+                 email, senha_hash, role
+          FROM users
+          WHERE LOWER(email)=$1
+          LIMIT 1
+        `,
+          [email]
+        );
+        if (r2.rowCount > 0 && r2.rows[0].nome) user.nome = r2.rows[0].nome;
+      }
     } else {
       user = mock.users.find((u) => u.email.toLowerCase() === email);
     }
@@ -381,7 +436,12 @@ app.post("/login", async (req, res) => {
     const ok = await bcrypt.compare(senha, user.senha_hash);
     if (!ok) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
 
-    req.session.user = { id: user.id, nome: user.nome, email: user.email, role: user.role || "user" };
+    req.session.user = {
+      id: user.id,
+      nome: user.nome || "Usuário",
+      email: user.email,
+      role: user.role || "user",
+    };
 
     await auditLog(req.session.user.nome, "Login", `email=${user.email}`);
     return res.redirect("/dashboard");
@@ -416,7 +476,7 @@ app.post("/register", async (req, res) => {
     const hash = await bcrypt.hash(senha, 10);
 
     if (USE_DB) {
-      const exists = await pool.query(`SELECT id FROM users WHERE email=$1`, [email]);
+      const exists = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1`, [email]);
       if (exists.rowCount > 0) {
         return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       }
@@ -447,40 +507,33 @@ app.get("/logout", async (req, res) => {
   req.session.destroy(() => res.redirect("/login"));
 });
 
-// (Opcional) rota "esqueci senha" usada no login.ejs
-app.get("/esqueci-senha", (req, res) => {
-  // Simples: manda para login
-  res.redirect("/login");
-});
+// rota usada no login.ejs
+app.get("/esqueci-senha", (req, res) => res.redirect("/login"));
 
 /* -----------------------------
    Rotas protegidas
 ----------------------------- */
 app.get("/dashboard", requireAuth, async (req, res) => {
   try {
-    // KPIs + séries
     let total = 0;
     let abertas = 0;
     let custoTotal = 0;
     let tempoMedioHoras = 0;
 
-    // Série semanal simples (11 pontos)
     const serieSemanal = Array(11).fill(0);
     const motivos = { IVPLAST: 0, Cliente: 0, Transportadora: 0, Vendedor: 0 };
 
     if (USE_DB) {
-      const r = await pool.query(`SELECT id, motivo, status, custo_estimado, created_at, updated_at FROM ocorrencias`);
+      const r = await pool.query(`SELECT motivo, status, custo_estimado, created_at, updated_at FROM ocorrencias`);
       const rows = r.rows;
 
       total = rows.length;
       abertas = rows.filter((o) => String(o.status).toLowerCase() !== "resolvido").length;
       custoTotal = rows.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0);
 
-      // tempo médio (created_at -> updated_at)
       const tempos = rows.map((o) => hoursBetween(o.created_at, o.updated_at)).filter((n) => n > 0);
       tempoMedioHoras = tempos.length ? Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length) : 0;
 
-      // weekly: muito simplificado (agrupa por semana relativa — só pra gráfico funcionar)
       rows.forEach((o) => {
         const diffDays = Math.floor((Date.now() - new Date(o.created_at).getTime()) / (1000 * 60 * 60 * 24));
         const idx = 10 - Math.min(10, Math.floor(diffDays / 7));
@@ -490,19 +543,16 @@ app.get("/dashboard", requireAuth, async (req, res) => {
         if (motivos[m] !== undefined) motivos[m] += 1;
       });
     } else {
-      const rows = mock.ocorrencias;
-      total = rows.length || 17;
-      abertas = rows.filter((o) => String(o.status).toLowerCase() !== "resolvido").length || 2;
-      custoTotal = rows.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0) || 35340;
+      total = mock.ocorrencias.length || 17;
+      abertas = mock.ocorrencias.filter((o) => String(o.status).toLowerCase() !== "resolvido").length || 2;
+      custoTotal = mock.ocorrencias.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0) || 35340;
 
-      const tempos = rows.map((o) => hoursBetween(o.created_at, o.updated_at)).filter((n) => n > 0);
+      const tempos = mock.ocorrencias.map((o) => hoursBetween(o.created_at, o.updated_at)).filter((n) => n > 0);
       tempoMedioHoras = tempos.length ? Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length) : 26;
 
-      // fallback visual
       const fallback = [0, 0, 1, 2, 6, 3, 5, 2, 2, 2, 4];
       for (let i = 0; i < 11; i++) serieSemanal[i] = fallback[i];
 
-      // motivos fallback
       motivos.IVPLAST = 6;
       motivos.Cliente = 5;
       motivos.Transportadora = 4;
@@ -552,7 +602,6 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
         situacao: o.status,
       }));
     } else {
-      // mock (se vazio, usa 3 linhas visuais)
       if (!mock.ocorrencias.length) {
         lista = [
           { id: 12484, cliente: "LIMA E SILVA COMERCIAL LTDA", criadoEm: "há 27 dias", ultimaAtividade: "há 73 dias", status: "Aberto", situacao: "Em andamento" },
@@ -575,7 +624,6 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
       }
     }
 
-    // filtros
     if (q) {
       lista = lista.filter((o) => String(o.cliente).toLowerCase().includes(q) || String(o.id).includes(q));
     }
@@ -648,7 +696,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         [newId, req.session.user.nome, "Ocorrência criada."]
       );
 
-      // anexos
       const files = req.files || [];
       for (const f of files) {
         await pool.query(
@@ -699,7 +746,6 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
     if (USE_DB) {
       const r = await pool.query(`SELECT * FROM ocorrencias WHERE id=$1`, [id]);
       if (r.rowCount === 0) return res.redirect("/ocorrencias");
-
       const o = r.rows[0];
 
       const acts = await pool.query(
@@ -726,9 +772,8 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         })),
       };
     } else {
-      ocorrencia = mock.ocorrencias.find((x) => x.id === id);
-      if (!ocorrencia) {
-        // fallback visual
+      const found = mock.ocorrencias.find((x) => x.id === id);
+      if (!found) {
         ocorrencia = {
           id,
           cliente: "LIMA E SILVA COMERCIAL LTDA",
@@ -748,18 +793,18 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         };
       } else {
         ocorrencia = {
-          id: ocorrencia.id,
-          cliente: ocorrencia.razao_social,
-          criadoEm: (ocorrencia.created_at || "").slice(0, 10) || "2026-02-03",
-          status: ocorrencia.status,
-          motivo: ocorrencia.motivo,
-          tipo: ocorrencia.tipo,
-          pedido: ocorrencia.numero_pedido || "-",
-          nf: ocorrencia.numero_nf || "-",
-          custo: Number(ocorrencia.custo_estimado || 0),
-          responsavel: ocorrencia.responsavel,
-          descricao: ocorrencia.descricao,
-          atividades: (ocorrencia.atividades || []).map((a) => a),
+          id: found.id,
+          cliente: found.razao_social,
+          criadoEm: (found.created_at || "").slice(0, 10) || "2026-02-03",
+          status: found.status,
+          motivo: found.motivo,
+          tipo: found.tipo,
+          pedido: found.numero_pedido || "-",
+          nf: found.numero_nf || "-",
+          custo: Number(found.custo_estimado || 0),
+          responsavel: found.responsavel,
+          descricao: found.descricao,
+          atividades: (found.atividades || []).map((a) => a),
         };
       }
     }
@@ -780,10 +825,11 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
 
   try {
     if (USE_DB) {
-      await pool.query(
-        `UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`,
-        [status, responsavel, id]
-      );
+      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [
+        status,
+        responsavel,
+        id,
+      ]);
       await pool.query(
         `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
         [id, req.session.user.nome, `Atualizou: status=${status}, responsável=${responsavel}.`]
@@ -795,7 +841,11 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
         o.responsavel = responsavel;
         o.updated_at = nowISO();
         o.atividades = o.atividades || [];
-        o.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: `Atualizou: status=${status}, responsável=${responsavel}.` });
+        o.atividades.unshift({
+          quando: "agora",
+          quem: req.session.user.nome,
+          texto: `Atualizou: status=${status}, responsável=${responsavel}.`,
+        });
       }
     }
 
@@ -846,7 +896,6 @@ app.get("/relatorios", requireAuth, async (req, res) => {
     let rows = [];
 
     if (USE_DB) {
-      // filtro simples por created_at (se datas vierem)
       const where = [];
       const params = [];
       let idx = 1;
@@ -872,12 +921,7 @@ app.get("/relatorios", requireAuth, async (req, res) => {
       const r = await pool.query(sql, params);
       rows = r.rows;
     } else {
-      rows = mock.ocorrencias.map((o) => ({
-        motivo: o.motivo,
-        status: o.status,
-        custo_estimado: o.custo_estimado,
-      }));
-      // sem filtro detalhado no mock (pra UI)
+      rows = mock.ocorrencias.map((o) => ({ motivo: o.motivo, status: o.status, custo_estimado: o.custo_estimado }));
     }
 
     const abertas = rows.filter((o) => String(o.status).toLowerCase() !== "resolvido").length;
@@ -927,6 +971,7 @@ app.post("/configuracoes/admin", requireAuth, async (req, res) => {
     await upsertSetting("adminName", adminName);
 
     await auditLog(req.session.user.nome, "Alterou configurações", "admin");
+
     const config = {
       adminEmail: await getSetting("adminEmail", ""),
       adminName: await getSetting("adminName", ""),
@@ -951,13 +996,22 @@ app.post("/configuracoes/senha", requireAuth, async (req, res) => {
     };
 
     if (!novaSenha || novaSenha.length < 6) {
-      return res.render("configuracoes", { usuario: req.session.user, config, success: null, error: "Senha inválida (mínimo 6 caracteres)." });
+      return res.render("configuracoes", {
+        usuario: req.session.user,
+        config,
+        success: null,
+        error: "Senha inválida (mínimo 6 caracteres).",
+      });
     }
     if (novaSenha !== novaSenha2) {
-      return res.render("configuracoes", { usuario: req.session.user, config, success: null, error: "As senhas não conferem." });
+      return res.render("configuracoes", {
+        usuario: req.session.user,
+        config,
+        success: null,
+        error: "As senhas não conferem.",
+      });
     }
 
-    // regra simples: altera a senha do usuário logado
     const hash = await bcrypt.hash(novaSenha, 10);
 
     if (USE_DB) {
@@ -999,7 +1053,7 @@ app.get("/auditoria", requireAuth, async (req, res) => {
 });
 
 /* -----------------------------
-   Static (opcional)
+   Static (uploads)
 ----------------------------- */
 app.use("/uploads", express.static(UPLOAD_DIR));
 
