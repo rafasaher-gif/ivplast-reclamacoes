@@ -21,7 +21,11 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 
 let pg;
-try { pg = require("pg"); } catch (_) { pg = null; }
+try {
+  pg = require("pg");
+} catch (_) {
+  pg = null;
+}
 
 const app = express();
 app.set("trust proxy", 1);
@@ -278,16 +282,9 @@ async function dbInit() {
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS nfd_numero TEXT;`);
 
   // ✅ CORREÇÃO DO ERRO: coluna "tipo" (legado) pode existir como NOT NULL no seu DB
-  // 1) Se não existir, cria com default
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS tipo TEXT;`);
-
-  // 2) Garante que nunca fique nula
   await pool.query(`UPDATE ocorrencias SET tipo = COALESCE(tipo, 'Comercial') WHERE tipo IS NULL;`);
-
-  // 3) Garante default (assim INSERT não quebra mesmo se não mandar)
   await pool.query(`ALTER TABLE ocorrencias ALTER COLUMN tipo SET DEFAULT 'Comercial';`);
-
-  // 4) Se a sua coluna estiver NOT NULL, isso já resolve. Se estiver NULLABLE, melhor ainda.
 
   // Atividades / anexos
   await pool.query(`
@@ -341,7 +338,6 @@ async function dbInit() {
 
   if (adminEmail && adminPass) {
     const hash = await bcrypt.hash(adminPass, 10);
-
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
 
     if (existing.rowCount === 0) {
@@ -448,7 +444,11 @@ app.post("/register", async (req, res) => {
       if (exists.rowCount > 0) {
         return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       }
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'user')`, [nome, email, hash]);
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'user')`, [
+        nome,
+        email,
+        hash,
+      ]);
     } else {
       const exists = mock.users.find((u) => u.email.toLowerCase() === email);
       if (exists) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
@@ -589,14 +589,14 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 
 /* -------- /novo (GET) com canSeeCost -------- */
 app.get("/novo", requireAuth, (req, res) => {
-  const role = String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
+  const role = String(req.session.user?.role || "").toLowerCase();
   const canSeeCost = ["admin", "financeiro", "diretoria"].includes(role);
 
   res.render("novo", {
     usuario: req.session.user,
     canSeeCost,
     error: null,
-    success: null
+    success: null,
   });
 });
 
@@ -605,12 +605,12 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   try {
     const itensDescricao = []
       .concat(req.body["itens_descricao[]"] || req.body.itens_descricao || [])
-      .map(v => String(v || "").trim())
-      .filter(v => v.length > 0);
+      .map((v) => String(v || "").trim())
+      .filter((v) => v.length > 0);
 
     const itensQuantidadeRaw = []
       .concat(req.body["itens_quantidade[]"] || req.body.itens_quantidade || [])
-      .map(v => String(v || "").trim());
+      .map((v) => String(v || "").trim());
 
     const itemErrado = String(req.body.item_errado || "nao") === "sim";
 
@@ -626,8 +626,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       cliente_emitiu_nfd: String(req.body.cliente_emitiu_nfd || "nao") === "sim",
       nfd_numero: String(req.body.nfd_numero || "").trim(),
 
-      // ✅ FIX: "tipo" é legado no banco (NOT NULL). Como você removeu do formulário,
-      // a gente fixa um valor padrão no backend:
+      // ✅ FIX: "tipo" é legado no banco (NOT NULL). Valor padrão no backend.
       tipo: "Comercial",
 
       descricao: String(req.body.descricao || "").trim(),
@@ -638,7 +637,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     const item_obs = String(req.body.item_obs || "").trim();
 
     if (!data.razao_social || !data.descricao) {
-      const role = String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
+      const role = String(req.session.user?.role || "").toLowerCase();
       const canSeeCost = ["admin", "financeiro", "diretoria"].includes(role);
 
       return res.status(400).render("novo", {
@@ -676,7 +675,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
           data.empresa,
           data.motivo,
-          data.tipo,          // ✅ aqui
+          data.tipo,
           data.descricao,
 
           data.cliente_emitiu_nfd,
@@ -690,10 +689,11 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
       newId = r.rows[0].id;
 
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [newId, req.session.user.nome, "Ocorrência criada."]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+        newId,
+        req.session.user.nome,
+        "Ocorrência criada.",
+      ]);
 
       if (itemErrado) {
         const max = Math.min(10, itensDescricao.length);
@@ -716,22 +716,25 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         }
 
         if (item_obs) {
-          await pool.query(
-            `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-            [newId, req.session.user.nome, `Obs. itens: ${item_obs}`]
-          );
+          await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+            newId,
+            req.session.user.nome,
+            `Obs. itens: ${item_obs}`,
+          ]);
         }
       }
 
       const files = req.files || [];
       for (const f of files) {
         await pool.query(
-          `INSERT INTO ocorrencia_anexos (ocorrencia_id,filename,originalname,mimetype,size) VALUES ($1,$2,$3,$4,$5)`,
+          `INSERT INTO ocorrencia_anexos (ocorrencia_id,filename,originalname,mimetype,size)
+           VALUES ($1,$2,$3,$4,$5)`,
           [newId, f.filename, f.originalname, f.mimetype, f.size]
         );
       }
     } else {
       newId = mock.ocorrencias.length ? Math.max(...mock.ocorrencias.map((o) => o.id)) + 1 : 11000;
+
       mock.ocorrencias.push({
         id: newId,
         ...data,
@@ -747,7 +750,9 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
           : [],
         atividades: [
           { quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." },
-          ...(itemErrado && item_obs ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }] : []),
+          ...(itemErrado && item_obs
+            ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }]
+            : []),
         ],
         anexos: (req.files || []).map((f) => ({
           filename: f.filename,
@@ -766,7 +771,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   }
 });
 
-/* -------- Detalhe (com itens) -------- */
+/* -------- Detalhe (com itens + anexos) -------- */
 app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
   const id = safeInt(req.params.id, 0);
   if (!id) return res.redirect("/ocorrencias");
@@ -774,6 +779,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
   try {
     let ocorrencia = null;
     let itens = [];
+    let anexos = [];
 
     if (USE_DB) {
       const r = await pool.query(`SELECT * FROM ocorrencias WHERE id=$1`, [id]);
@@ -781,15 +787,31 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       const o = r.rows[0];
 
       const acts = await pool.query(
-        `SELECT quem, texto, created_at FROM ocorrencia_atividades WHERE ocorrencia_id=$1 ORDER BY id DESC LIMIT 50`,
+        `SELECT quem, texto, created_at
+         FROM ocorrencia_atividades
+         WHERE ocorrencia_id=$1
+         ORDER BY id DESC
+         LIMIT 50`,
         [id]
       );
 
       const itensR = await pool.query(
-        `SELECT descricao, quantidade FROM ocorrencia_itens WHERE ocorrencia_id=$1 ORDER BY id ASC`,
+        `SELECT descricao, quantidade
+         FROM ocorrencia_itens
+         WHERE ocorrencia_id=$1
+         ORDER BY id ASC`,
         [id]
       );
       itens = itensR.rows || [];
+
+      const anexosR = await pool.query(
+        `SELECT id, filename, originalname, mimetype, size, created_at
+         FROM ocorrencia_anexos
+         WHERE ocorrencia_id=$1
+         ORDER BY id ASC`,
+        [id]
+      );
+      anexos = anexosR.rows || [];
 
       ocorrencia = {
         id: o.id,
@@ -815,6 +837,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       if (!found) return res.redirect("/ocorrencias");
 
       itens = found.itens || [];
+      anexos = found.anexos || [];
 
       ocorrencia = {
         id: found.id,
@@ -833,10 +856,10 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       };
     }
 
-    res.render("ocorrencia_detalhe", { usuario: req.session.user, ocorrencia, itens, id });
+    return res.render("ocorrencia_detalhe", { usuario: req.session.user, ocorrencia, itens, anexos, id });
   } catch (err) {
     console.error("DETALHE_ERR:", err);
-    res.status(500).send("Erro ao carregar ocorrência.");
+    return res.status(500).send("Erro ao carregar ocorrência.");
   }
 });
 
@@ -855,10 +878,11 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
         responsavel,
         id,
       ]);
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [id, req.session.user.nome, `Atualizou: status=${status}, responsável=${responsavel}.`]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+        id,
+        req.session.user.nome,
+        `Atualizou: status=${status}, responsável=${responsavel}.`,
+      ]);
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -892,10 +916,11 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   try {
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET updated_at=NOW() WHERE id=$1`, [id]);
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [id, req.session.user.nome, comentario]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+        id,
+        req.session.user.nome,
+        comentario,
+      ]);
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -979,4 +1004,3 @@ const PORT = process.env.PORT || 3000;
     process.exit(1);
   }
 })();
-
