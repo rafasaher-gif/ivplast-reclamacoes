@@ -21,14 +21,10 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 
 let pg;
-try {
-  pg = require("pg");
-} catch (_) {
-  pg = null;
-}
+try { pg = require("pg"); } catch (_) { pg = null; }
 
 const app = express();
-app.set("trust proxy", 1); // Render usa proxy
+app.set("trust proxy", 1);
 
 /* -----------------------------
    Config básica
@@ -52,7 +48,7 @@ const upload = multer({
       cb(null, `${Date.now()}_${safe}`);
     },
   }),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
 /* -----------------------------
@@ -67,8 +63,8 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: "auto", // https no Render
-      maxAge: 1000 * 60 * 60 * 12, // 12h
+      secure: "auto",
+      maxAge: 1000 * 60 * 60 * 12,
     },
   })
 );
@@ -222,7 +218,6 @@ async function dbInit() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
 
-  // Compat: name -> nome, password_hash -> senha_hash
   await pool.query(`
     DO $$
     BEGIN
@@ -267,11 +262,6 @@ async function dbInit() {
       cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE,
       nfd_numero TEXT,
 
-      item_errado BOOLEAN NOT NULL DEFAULT FALSE,
-      item_descricao TEXT,
-      item_quantidade INTEGER,
-      item_obs TEXT,
-
       custo_estimado NUMERIC(14,2) NOT NULL DEFAULT 0,
       responsavel TEXT NOT NULL DEFAULT 'Atendimento',
       status TEXT NOT NULL DEFAULT 'Aberto',
@@ -282,14 +272,10 @@ async function dbInit() {
     );
   `);
 
-  // Migração: garante colunas mesmo em banco antigo
+  // Migração/garantias
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS empresa TEXT NOT NULL DEFAULT 'IVPLAST';`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS nfd_numero TEXT;`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS item_errado BOOLEAN NOT NULL DEFAULT FALSE;`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS item_descricao TEXT;`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS item_quantidade INTEGER;`);
-  await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS item_obs TEXT;`);
 
   // Atividades / anexos
   await pool.query(`
@@ -310,6 +296,17 @@ async function dbInit() {
       originalname TEXT NOT NULL,
       mimetype TEXT,
       size INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // ✅ PASSO 1: tabela de itens por ocorrência
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ocorrencia_itens (
+      id SERIAL PRIMARY KEY,
+      ocorrencia_id INTEGER REFERENCES ocorrencias(id) ON DELETE CASCADE,
+      descricao TEXT NOT NULL,
+      quantidade INTEGER,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
@@ -345,7 +342,7 @@ async function dbInit() {
     } else {
       const id = existing.rows[0].id;
       await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [adminName, id]);
-      await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]); // força reset
+      await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
       await pool.query(`UPDATE users SET role = 'admin' WHERE id=$1`, [id]);
       console.log("✅ Admin atualizado via ENV (senha reset).");
     }
@@ -594,6 +591,18 @@ app.get("/novo", requireAuth, (req, res) => {
 /* -------- /novo (POST) -------- */
 app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   try {
+    // ✅ PASSO 2: ler arrays do form (itens)
+    const itensDescricao = []
+      .concat(req.body["itens_descricao[]"] || req.body.itens_descricao || [])
+      .map(v => String(v || "").trim())
+      .filter(v => v.length > 0);
+
+    const itensQuantidadeRaw = []
+      .concat(req.body["itens_quantidade[]"] || req.body.itens_quantidade || [])
+      .map(v => String(v || "").trim());
+
+    const itemErrado = String(req.body.item_errado || "nao") === "sim";
+
     const data = {
       razao_social: String(req.body.razao_social || "").trim(),
       cnpj: String(req.body.cnpj || "").trim(),
@@ -601,20 +610,17 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       numero_nf: String(req.body.numero_nf || "").trim(),
 
       empresa: String(req.body.empresa || "IVPLAST").trim(),
-      motivo: String(req.body.motivo || "IVPLAST").trim(),
+      motivo: String(req.body.motivo || "IVPLAST").trim(), // "Fábrica" no select, mas value IVPLAST
 
       cliente_emitiu_nfd: String(req.body.cliente_emitiu_nfd || "nao") === "sim",
       nfd_numero: String(req.body.nfd_numero || "").trim(),
-
-      item_errado: String(req.body.item_errado || "nao") === "sim",
-      item_descricao: String(req.body.item_descricao || "").trim(),
-      item_quantidade: parseInt(req.body.item_quantidade || "", 10) || null,
-      item_obs: String(req.body.item_obs || "").trim(),
 
       descricao: String(req.body.descricao || "").trim(),
       custo_estimado: safeFloat(req.body.custo_estimado, 0),
       responsavel: String(req.body.responsavel || "Atendimento").trim(),
     };
+
+    const item_obs = String(req.body.item_obs || "").trim(); // observação geral dos itens
 
     if (!data.razao_social || !data.descricao) {
       const role = String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
@@ -630,11 +636,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
     // Se marcou NFD = não, limpa número
     if (!data.cliente_emitiu_nfd) data.nfd_numero = "";
-    // Se item errado = não, limpa item/qtd
-    if (!data.item_errado) {
-      data.item_descricao = "";
-      data.item_quantidade = null;
-    }
 
     let newId = null;
 
@@ -645,14 +646,12 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
           (razao_social, cnpj, numero_pedido, numero_nf,
            empresa, motivo, descricao,
            cliente_emitiu_nfd, nfd_numero,
-           item_errado, item_descricao, item_quantidade, item_obs,
            custo_estimado, responsavel, status, created_by)
         VALUES
           ($1,$2,$3,$4,
            $5,$6,$7,
            $8,$9,
-           $10,$11,$12,$13,
-           $14,$15,'Aberto',$16)
+           $10,$11,'Aberto',$12)
         RETURNING id
       `,
         [
@@ -668,11 +667,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
           data.cliente_emitiu_nfd,
           data.nfd_numero || null,
 
-          data.item_errado,
-          data.item_descricao || null,
-          data.item_quantidade,
-          data.item_obs || null,
-
           data.custo_estimado,
           data.responsavel,
           req.session.user.id,
@@ -685,6 +679,35 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
         [newId, req.session.user.nome, "Ocorrência criada."]
       );
+
+      // ✅ PASSO 3: salvar itens (máx 10) + limite qtd 1..10000
+      if (itemErrado) {
+        const max = Math.min(10, itensDescricao.length);
+
+        for (let i = 0; i < max; i++) {
+          const desc = itensDescricao[i];
+
+          let qtd = parseInt(itensQuantidadeRaw[i] || "", 10);
+          if (!Number.isFinite(qtd)) qtd = null;
+          if (qtd !== null) {
+            if (qtd < 1) qtd = 1;
+            if (qtd > 10000) qtd = 10000;
+          }
+
+          await pool.query(
+            `INSERT INTO ocorrencia_itens (ocorrencia_id, descricao, quantidade)
+             VALUES ($1,$2,$3)`,
+            [newId, desc, qtd]
+          );
+        }
+
+        if (item_obs) {
+          await pool.query(
+            `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+            [newId, req.session.user.nome, `Obs. itens: ${item_obs}`]
+          );
+        }
+      }
 
       const files = req.files || [];
       for (const f of files) {
@@ -702,7 +725,16 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         created_by: req.session.user.id,
         created_at: nowISO(),
         updated_at: nowISO(),
-        atividades: [{ quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." }],
+        itens: itemErrado
+          ? itensDescricao.slice(0, 10).map((desc, i) => ({
+              descricao: desc,
+              quantidade: Math.min(10000, Math.max(1, parseInt(itensQuantidadeRaw[i] || "1", 10) || 1)),
+            }))
+          : [],
+        atividades: [
+          { quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." },
+          ...(itemErrado && item_obs ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }] : []),
+        ],
         anexos: (req.files || []).map((f) => ({
           filename: f.filename,
           originalname: f.originalname,
@@ -720,12 +752,14 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   }
 });
 
+/* -------- Detalhe (com itens) -------- */
 app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
   const id = safeInt(req.params.id, 0);
   if (!id) return res.redirect("/ocorrencias");
 
   try {
     let ocorrencia = null;
+    let itens = [];
 
     if (USE_DB) {
       const r = await pool.query(`SELECT * FROM ocorrencias WHERE id=$1`, [id]);
@@ -737,6 +771,12 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         [id]
       );
 
+      const itensR = await pool.query(
+        `SELECT descricao, quantidade FROM ocorrencia_itens WHERE ocorrencia_id=$1 ORDER BY id ASC`,
+        [id]
+      );
+      itens = itensR.rows || [];
+
       ocorrencia = {
         id: o.id,
         cliente: o.razao_social,
@@ -747,10 +787,6 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         pedido: o.numero_pedido || "-",
         nf: o.numero_nf || "-",
         nfd: o.nfd_numero || "-",
-        item_errado: !!o.item_errado,
-        item_descricao: o.item_descricao || "-",
-        item_quantidade: o.item_quantidade || "-",
-        item_obs: o.item_obs || "-",
         custo: Number(o.custo_estimado || 0),
         responsavel: o.responsavel,
         descricao: o.descricao,
@@ -764,6 +800,8 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       const found = mock.ocorrencias.find((x) => x.id === id);
       if (!found) return res.redirect("/ocorrencias");
 
+      itens = found.itens || [];
+
       ocorrencia = {
         id: found.id,
         cliente: found.razao_social,
@@ -774,10 +812,6 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         pedido: found.numero_pedido || "-",
         nf: found.numero_nf || "-",
         nfd: found.nfd_numero || "-",
-        item_errado: !!found.item_errado,
-        item_descricao: found.item_descricao || "-",
-        item_quantidade: found.item_quantidade || "-",
-        item_obs: found.item_obs || "-",
         custo: Number(found.custo_estimado || 0),
         responsavel: found.responsavel,
         descricao: found.descricao,
@@ -785,13 +819,14 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       };
     }
 
-    res.render("ocorrencia_detalhe", { usuario: req.session.user, ocorrencia, id });
+    res.render("ocorrencia_detalhe", { usuario: req.session.user, ocorrencia, itens, id });
   } catch (err) {
     console.error("DETALHE_ERR:", err);
     res.status(500).send("Erro ao carregar ocorrência.");
   }
 });
 
+/* Atualiza status/responsável */
 app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
   const id = safeInt(req.params.id, 0);
   if (!id) return res.redirect("/ocorrencias");
@@ -833,6 +868,7 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
   }
 });
 
+/* Comentário */
 app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   const id = safeInt(req.params.id, 0);
   const comentario = String(req.body.comentario || "").trim();
@@ -909,14 +945,10 @@ app.get("/auditoria", requireAuth, async (req, res) => {
   }
 });
 
-/* -----------------------------
-   Static
------------------------------ */
+/* Static */
 app.use("/uploads", express.static(UPLOAD_DIR));
 
-/* -----------------------------
-   Boot
------------------------------ */
+/* Boot */
 const PORT = process.env.PORT || 3000;
 
 (async () => {
@@ -927,11 +959,9 @@ const PORT = process.env.PORT || 3000;
     } else {
       console.log("⚠️ Rodando em modo MOCK (sem DATABASE_URL).");
     }
-
     app.listen(PORT, () => console.log(`🚀 Server rodando na porta ${PORT}`));
   } catch (err) {
     console.error("BOOT_ERR:", err);
     process.exit(1);
   }
 })();
-
