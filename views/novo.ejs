@@ -1,112 +1,180 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-br">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>IVPLAST | Nova Ocorrência</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Nova Ocorrência - IVPLAST</title>
+
   <style>
-    body{background:#f3f5f7;}
-    .app{display:flex;min-height:100vh;}
-    .sidebar{width:260px;background:#fff;border-right:1px solid #e9ecef;padding:18px 14px;position:sticky;top:0;height:100vh;}
-    .nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;color:#344054;text-decoration:none;}
-    .nav a:hover{background:#f2f4f7;}
-    .nav a.active{background:#e8f2ff;color:#0b5ed7;font-weight:600;}
-    .content{flex:1;padding:22px;}
-    .panel{border:0;border-radius:14px;box-shadow:0 8px 22px rgba(0,0,0,.06);}
-    .topbar{background:#fff;border:1px solid #e9ecef;border-radius:14px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.04);margin-bottom:18px;}
-    .btn-primary{background:#1177cc;border-color:#1177cc;}
+    :root{--bg:#f5f7fb;--card:#fff;--text:#0f172a;--muted:#64748b;--line:#e5e7eb;--primary:#1d4ed8;}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+    a{color:inherit;text-decoration:none}
+    .layout{display:flex;min-height:100vh}
+    .sidebar{width:260px;background:#fff;border-right:1px solid var(--line);padding:18px}
+    .brand{display:flex;gap:10px;align-items:center;margin-bottom:16px}
+    .brand .logo{font-weight:800;letter-spacing:.5px;color:#2563eb}
+    .nav{margin-top:10px}
+    .nav a{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:10px;color:var(--text)}
+    .nav a.active{background:#eef2ff;color:#1d4ed8;font-weight:600}
+    .nav a:hover{background:#f1f5f9}
+    .spacer{height:10px}
+    .content{flex:1;padding:22px}
+    .topbar{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;justify-content:space-between;align-items:center}
+    .crumbs{font-size:13px;color:var(--muted)}
+    .title{font-size:22px;font-weight:750;margin:4px 0 0}
+    .subtitle{font-size:13px;color:var(--muted);margin:2px 0 0}
+    .user{font-size:13px;color:var(--muted)}
+    .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:16px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+    label{display:block;font-size:13px;color:#334155;margin-bottom:6px}
+    input,select,textarea{
+      width:100%;border:1px solid var(--line);border-radius:12px;
+      padding:11px 12px;font-size:14px;background:#fff;outline:none
+    }
+    textarea{min-height:120px;resize:vertical}
+    input:focus,select:focus,textarea:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+    .btn{border:1px solid var(--line);background:#fff;border-radius:12px;padding:11px 14px;font-weight:650;cursor:pointer}
+    .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+    .btn:hover{filter:brightness(.98)}
+    .alert{border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:13px}
+    .alert.err{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+    .alert.ok{background:#ecfdf5;border:1px solid #bbf7d0;color:#166534}
+    .hint{font-size:12px;color:var(--muted);margin-top:6px}
+    @media (max-width: 980px){
+      .sidebar{display:none}
+      .content{padding:14px}
+      .grid,.grid3{grid-template-columns:1fr}
+    }
   </style>
 </head>
+
 <body>
-<%
-  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Raphael" };
-%>
-<div class="app">
-  <aside class="sidebar">
-    <div class="d-flex align-items-center gap-2 px-2 mb-3">
-      <img src="https://dummyimage.com/120x34/ffffff/1177cc.png&text=IVPLAST" style="height:34px;" alt="IVPLAST">
-      <div>
-        <div class="fw-semibold">IVPLAST</div>
-        <div class="small text-secondary">Ocorrências</div>
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">IVPLAST</div>
+        <div style="font-size:12px;color:#64748b">Ocorrências</div>
       </div>
-    </div>
-    <div class="nav flex-column">
-      <a href="/dashboard">🏠 Menu Principal</a>
-      <a class="active" href="/novo">➕ Novo</a>
-      <a href="/ocorrencias">🔎 Busca por Ocorrência</a>
-      <a href="/relatorios">📊 Relatórios</a>
-      <a href="/configuracoes">⚙️ Configurações</a>
-      <a href="/auditoria">🧾 Auditoria</a>
-      <hr class="my-2"/>
-      <a href="/logout">🚪 Sair</a>
-    </div>
-  </aside>
 
-  <main class="content">
-    <div class="topbar d-flex justify-content-between align-items-center">
-      <div>
-        <div class="small text-secondary">Menu Principal / Ocorrências / Nova</div>
-        <div class="fw-semibold">Nova Ocorrência</div>
-        <div class="small text-secondary">Preencha os dados para registrar a solicitação.</div>
+      <nav class="nav">
+        <a href="/dashboard">🏠 Menu Principal</a>
+        <a href="/novo" class="active">➕ Novo</a>
+        <a href="/ocorrencias">🔎 Busca por Ocorrência</a>
+        <a href="/relatorios">📊 Relatórios</a>
+        <a href="/configuracoes">⚙️ Configurações</a>
+        <a href="/auditoria">🧾 Auditoria</a>
+        <div class="spacer"></div>
+        <a href="/logout">🚪 Sair</a>
+      </nav>
+    </aside>
+
+    <!-- Conteúdo -->
+    <main class="content">
+      <div class="topbar">
+        <div>
+          <div class="crumbs">Menu Principal / Ocorrências / <b>Nova</b></div>
+          <div class="title">Nova Ocorrência</div>
+          <div class="subtitle">Preencha os dados para registrar a solicitação.</div>
+        </div>
+        <div class="user">Logado como: <b><%= (usuario && usuario.nome) ? usuario.nome : "usuário" %></b></div>
       </div>
-      <div class="small text-secondary">Logado como: <b><%= user.nome %></b></div>
-    </div>
 
-    <% if (typeof error !== 'undefined' && error) { %>
-      <div class="alert alert-danger"><%= error %></div>
-    <% } %>
-    <% if (typeof success !== 'undefined' && success) { %>
-      <div class="alert alert-success"><%= success %></div>
-    <% } %>
+      <div class="card">
+        <% if (error) { %>
+          <div class="alert err"><%= error %></div>
+        <% } %>
+        <% if (success) { %>
+          <div class="alert ok"><%= success %></div>
+        <% } %>
 
-    <div class="card panel">
-      <div class="card-body">
+        <!-- IMPORTANTE: form + submit -->
         <form method="POST" action="/novo" enctype="multipart/form-data">
-          <div class="row g-3">
-            <div class="col-md-8">
-              <label class="form-label">Razão social</label>
-              <input name="razao_social" class="form-control" placeholder="Ex.: LIMA E SILVA COMERCIAL LTDA" required>
+          <div class="grid">
+            <div>
+              <label>Razão social</label>
+              <input name="razao_social" placeholder="Ex.: LIMA E SILVA COMERCIAL LTDA" required />
             </div>
-            <div class="col-md-4">
-              <label class="form-label">CNPJ</label>
-              <input name="cnpj" class="form-control" placeholder="00.000.000/0000-00">
+            <div>
+              <label>CNPJ</label>
+              <input name="cnpj" placeholder="00.000.000/0000-00" />
             </div>
+          </div>
 
-            <div class="col-md-6">
-              <label class="form-label">Número do Pedido</label>
-              <input name="numero_pedido" class="form-control" placeholder="Ex.: 224483">
+          <div class="grid" style="margin-top:14px">
+            <div>
+              <label>Número do Pedido</label>
+              <input name="numero_pedido" placeholder="Ex.: 69234" />
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Número da Nota Fiscal</label>
-              <input name="numero_nf" class="form-control" placeholder="Ex.: 13052">
+            <div>
+              <label>Número da Nota Fiscal</label>
+              <input name="numero_nf" placeholder="Ex.: 12345" />
             </div>
+          </div>
 
-            <div class="col-md-6">
-              <label class="form-label">Tipo</label>
-              <select name="tipo" class="form-select">
-                <option value="Producao">Produção</option>
-                <option value="Transporte">Transporte</option>
-                <option value="Financeiro">Financeiro</option>
+          <div class="grid" style="margin-top:14px">
+            <div>
+              <label>Tipo</label>
+              <select name="tipo">
                 <option value="Comercial">Comercial</option>
                 <option value="Qualidade">Qualidade</option>
+                <option value="Logística">Logística</option>
+                <option value="Financeiro">Financeiro</option>
                 <option value="Outros">Outros</option>
               </select>
             </div>
 
-            <div class="col-md-6">
-              <label class="form-label">Motivo / Origem</label>
-              <select name="motivo" class="form-select">
+            <div>
+              <label>Motivo / Origem</label>
+              <select name="motivo">
                 <option value="IVPLAST">IVPLAST</option>
                 <option value="Cliente">Cliente</option>
                 <option value="Transportadora">Transportadora</option>
                 <option value="Vendedor">Vendedor</option>
               </select>
             </div>
+          </div>
 
-            <div class="col-md-12">
-              <label class="form-label">Descrição</label>
-              <textarea name="descricao" class="form-control" rows="4" placeholder="Descreva o ocorrido com o máximo de detalhes..." required></textarea>
+          <div class="grid3" style="margin-top:14px">
+            <div>
+              <label>Custo estimado (R$)</label>
+              <input name="custo_estimado" placeholder="0,00" />
+              <div class="hint">Pode deixar vazio (assume 0).</div>
             </div>
 
-            <div class="col-md-6">
+            <div>
+              <label>Responsável</label>
+              <select name="responsavel">
+                <option value="Atendimento">Atendimento</option>
+                <option value="Comercial">Comercial</option>
+                <option value="Qualidade">Qualidade</option>
+                <option value="Logística">Logística</option>
+                <option value="Financeiro">Financeiro</option>
+              </select>
+            </div>
+
+            <div>
+              <label>Anexos</label>
+              <input type="file" name="anexos" multiple />
+              <div class="hint">Até 10 arquivos (10MB cada).</div>
+            </div>
+          </div>
+
+          <div style="margin-top:14px">
+            <label>Descrição</label>
+            <textarea name="descricao" placeholder="Descreva o problema, lote, fotos, detalhes..." required></textarea>
+          </div>
+
+          <div class="actions">
+            <a class="btn" href="/ocorrencias">Cancelar</a>
+            <button class="btn primary" type="submit">Salvar ocorrência</button>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
