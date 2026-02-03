@@ -1,37 +1,26 @@
-<h1>SOLUÇÕES DE BUCHAS IVPLAST</h1>
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SOLUÇÕES DE BUCHAS IVPLAST</title>
+</head>
+<body>
+  <h1>SOLUÇÕES DE BUCHAS IVPLAST</h1>
 
-<p>Logado como: <b><%= user.email %></b> (<%= user.role %>)</p>
+  <nav style="display:flex; gap:12px; margin:12px 0;">
+    <a href="/dashboard">Menu principal</a>
+    <a href="/novo">Novo</a>
+    <a href="/ocorrencias">Busca por ocorrência</a>
+    <a href="/relatorios">Relatório</a>
+    <a href="/configuracoes">Configurações</a>
+    <a href="/auditoria">Auditoria</a>
+    <a href="/logout">Sair</a>
+  </nav>
 
-<form method="GET" action="/dashboard">
-  <input name="q" placeholder="Pesquisar solicitações" />
-  <button type="submit">Buscar</button>
-</form>
+  <hr />
 
-<br>
-
-<table border="1" cellpadding="8" cellspacing="0">
-  <tr>
-    <th>Cliente</th>
-    <th>ID</th>
-    <th>Criado</th>
-    <th>Última atividade</th>
-    <th>Status</th>
-  </tr>
-
-  <% if (ocorrencias && ocorrencias.length) { %>
-    <% ocorrencias.forEach(o => { %>
-      <tr>
-        <td><%= o.cliente %></td>
-        <td><%= o.id %></td>
-        <td><%= o.criado %></td>
-        <td><%= o.ultima %></td>
-        <td><%= o.status %></td>
-      </tr>
-    <% }) %>
-  <% } else { %>
-    <tr><td colspan="5">Nenhuma ocorrência em aberto</td></tr>
-  <% } %>
-</table>
-
-<br>
-<a href="/logout">Sair</a>
+  <h2>Ocorrências em aberto</h2>
+  <p>(Aqui vai entrar a lista depois)</p>
+</body>
+</html>
