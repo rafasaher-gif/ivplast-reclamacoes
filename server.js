@@ -1,5 +1,5 @@
 /**
- * server.js — IVPLAST Reclamações (Express + EJS + Sessão + Postgres opcional)
+ * server.js — IVPLAST Reclamações (Express + EJS + Session + Postgres opcional)
  *
  * Dependências:
  *   npm i express ejs express-session bcryptjs pg multer
@@ -67,7 +67,7 @@ app.use(
       httpOnly: true,
       sameSite: "lax",
       secure: false,
-      maxAge: 1000 * 60 * 60 * 12,
+      maxAge: 1000 * 60 * 60 * 12, // 12h
     },
   })
 );
@@ -138,11 +138,7 @@ function hoursBetween(aISO, bISO) {
 ----------------------------- */
 const mock = {
   users: [],
-  settings: {
-    adminEmail: process.env.ADMIN_EMAIL || "",
-    adminName: process.env.ADMIN_NAME || "",
-    databaseSSL: envBool(process.env.DATABASE_SSL),
-  },
+  settings: {},
   ocorrencias: [],
   auditoria: [],
 };
@@ -203,24 +199,13 @@ async function auditLog(usuario, acao, alvo) {
 }
 
 /* -----------------------------
-   DB: detecção de colunas e migração automática
+   DB: migração automática SEM SHELL
+   (resolve: name->nome, password_hash->senha_hash)
 ----------------------------- */
-async function getUsersColumns() {
-  const r = await pool.query(
-    `
-    SELECT column_name
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'users'
-  `
-  );
-  return new Set(r.rows.map((x) => x.column_name));
-}
-
 async function dbInit() {
   if (!USE_DB) return;
 
-  // 1) Cria tabelas novas (se não existirem)
+  // 1) Garante que a tabela users existe (com colunas modernas opcionais)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -232,28 +217,17 @@ async function dbInit() {
     );
   `);
 
-  // 2) Migra compatibilidade com bancos antigos (name/password_hash)
-  //    Fazemos tudo sem referenciar coluna que pode não existir (usando DO + information_schema).
+  // 2) MIGRAÇÃO FORTE: garante colunas essenciais (não depende do estado antigo)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS senha_hash TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
+
+  // 3) Copia colunas antigas -> novas, se existirem (sem quebrar)
   await pool.query(`
     DO $$
     BEGIN
-      -- garante coluna nome
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='users' AND column_name='nome'
-      ) THEN
-        EXECUTE 'ALTER TABLE users ADD COLUMN nome TEXT';
-      END IF;
-
-      -- garante coluna senha_hash
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='users' AND column_name='senha_hash'
-      ) THEN
-        EXECUTE 'ALTER TABLE users ADD COLUMN senha_hash TEXT';
-      END IF;
-
-      -- copia name -> nome se existir name
+      -- name -> nome
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema='public' AND table_name='users' AND column_name='name'
@@ -261,26 +235,17 @@ async function dbInit() {
         EXECUTE 'UPDATE users SET nome = COALESCE(nome, name) WHERE nome IS NULL';
       END IF;
 
-      -- copia password_hash -> senha_hash se existir password_hash
+      -- password_hash -> senha_hash
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema='public' AND table_name='users' AND column_name='password_hash'
       ) THEN
         EXECUTE 'UPDATE users SET senha_hash = COALESCE(senha_hash, password_hash) WHERE senha_hash IS NULL';
       END IF;
-
-      -- garante role
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='users' AND column_name='role'
-      ) THEN
-        EXECUTE 'ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT ''user''';
-      END IF;
-
     END $$;
   `);
 
-  // 3) Outras tabelas
+  // 4) Outras tabelas do sistema
   await pool.query(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -339,70 +304,37 @@ async function dbInit() {
     );
   `);
 
-  // 4) Seed admin via ENV:
-  //    - se não existir, cria
-  //    - se existir e senha_hash estiver vazia, atualiza para a senha do ENV
+  // 5) Seed/Repair do ADMIN:
+  //    - se não existir: cria
+  //    - se existir: FORÇA atualizar senha_hash para a senha do ENV
   const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
 
   if (adminEmail && adminPass) {
-    const cols = await getUsersColumns();
-    const nameCol = cols.has("nome") ? "nome" : (cols.has("name") ? "name" : null);
-    const passCol = cols.has("senha_hash") ? "senha_hash" : (cols.has("password_hash") ? "password_hash" : null);
-
-    const existing = await pool.query(`SELECT id, ${nameCol ? nameCol : "NULL"} as nome, ${passCol ? passCol : "NULL"} as senha_hash FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
-
     const hash = await bcrypt.hash(adminPass, 10);
 
+    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
+
     if (existing.rowCount === 0) {
-      // cria admin novo usando colunas "modernas"
       await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'admin')`, [
         adminName,
         adminEmail,
         hash,
       ]);
+      console.log("✅ Admin criado via ENV.");
     } else {
-      // garante que o admin terá senha_hash preenchida
       const id = existing.rows[0].id;
       await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [adminName, id]);
-      await pool.query(`UPDATE users SET senha_hash = COALESCE(senha_hash,$1) WHERE id=$2`, [hash, id]);
+      await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]); // FORÇA
       await pool.query(`UPDATE users SET role = 'admin' WHERE id=$1`, [id]);
+      console.log("✅ Admin atualizado via ENV (senha reset).");
     }
   }
 
   await upsertSetting("adminEmail", process.env.ADMIN_EMAIL || "");
   await upsertSetting("adminName", process.env.ADMIN_NAME || "");
   await upsertSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)));
-}
-
-/* -----------------------------
-   Auth: pegar usuário com colunas variáveis
------------------------------ */
-async function getUserByEmail_DB(emailLower) {
-  const cols = await getUsersColumns();
-
-  const nameCol = cols.has("nome") ? "nome" : (cols.has("name") ? "name" : null);
-  const passCol = cols.has("senha_hash") ? "senha_hash" : (cols.has("password_hash") ? "password_hash" : null);
-  const roleCol = cols.has("role") ? "role" : null;
-
-  if (!passCol) {
-    throw new Error("Tabela users sem coluna de senha (senha_hash/password_hash).");
-  }
-
-  const selectParts = [
-    "id",
-    nameCol ? `${nameCol} AS nome` : `NULL AS nome`,
-    "email",
-    `${passCol} AS senha_hash`,
-    roleCol ? `${roleCol} AS role` : `'user' AS role`,
-  ];
-
-  const r = await pool.query(
-    `SELECT ${selectParts.join(", ")} FROM users WHERE LOWER(email)=$1 LIMIT 1`,
-    [emailLower]
-  );
-  return r.rowCount ? r.rows[0] : null;
 }
 
 /* -----------------------------
@@ -433,14 +365,19 @@ app.post("/login", async (req, res) => {
     let user = null;
 
     if (USE_DB) {
-      user = await getUserByEmail_DB(email);
+      const r = await pool.query(
+        `SELECT id, nome, email, senha_hash, role
+         FROM users
+         WHERE LOWER(email)=$1
+         LIMIT 1`,
+        [email]
+      );
+      user = r.rowCount ? r.rows[0] : null;
     } else {
       user = mock.users.find((u) => u.email.toLowerCase() === email);
     }
 
-    if (!user || !user.senha_hash) {
-      return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
-    }
+    if (!user || !user.senha_hash) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
 
     const ok = await bcrypt.compare(senha, user.senha_hash);
     if (!ok) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
@@ -483,11 +420,7 @@ app.post("/register", async (req, res) => {
       if (exists.rowCount > 0) {
         return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       }
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'user')`, [
-        nome,
-        email,
-        hash,
-      ]);
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'user')`, [nome, email, hash]);
     } else {
       const exists = mock.users.find((u) => u.email.toLowerCase() === email);
       if (exists) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
@@ -645,7 +578,11 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     };
 
     if (!data.razao_social || !data.descricao) {
-      return res.status(400).render("novo", { usuario: req.session.user, error: "Preencha Razão social e Descrição.", success: null });
+      return res.status(400).render("novo", {
+        usuario: req.session.user,
+        error: "Preencha Razão social e Descrição.",
+        success: null,
+      });
     }
 
     let newId = null;
@@ -675,11 +612,10 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
       newId = r.rows[0].id;
 
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-        newId,
-        req.session.user.nome,
-        "Ocorrência criada.",
-      ]);
+      await pool.query(
+        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+        [newId, req.session.user.nome, "Ocorrência criada."]
+      );
 
       const files = req.files || [];
       for (const f of files) {
@@ -698,7 +634,12 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         created_at: nowISO(),
         updated_at: nowISO(),
         atividades: [{ quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." }],
-        anexos: (req.files || []).map((f) => ({ filename: f.filename, originalname: f.originalname, mimetype: f.mimetype, size: f.size })),
+        anexos: (req.files || []).map((f) => ({
+          filename: f.filename,
+          originalname: f.originalname,
+          mimetype: f.mimetype,
+          size: f.size,
+        })),
       });
     }
 
@@ -706,7 +647,11 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     return res.redirect(`/ocorrencias/${newId}`);
   } catch (err) {
     console.error("NOVO_POST_ERR:", err);
-    return res.status(500).render("novo", { usuario: req.session.user, error: "Erro ao salvar ocorrência.", success: null });
+    return res.status(500).render("novo", {
+      usuario: req.session.user,
+      error: "Erro ao salvar ocorrência.",
+      success: null,
+    });
   }
 });
 
@@ -739,11 +684,16 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         custo: Number(o.custo_estimado || 0),
         responsavel: o.responsavel,
         descricao: o.descricao,
-        atividades: acts.rows.map((a) => ({ quando: daysAgoText(a.created_at), quem: a.quem, texto: a.texto })),
+        atividades: acts.rows.map((a) => ({
+          quando: daysAgoText(a.created_at),
+          quem: a.quem,
+          texto: a.texto,
+        })),
       };
     } else {
       const found = mock.ocorrencias.find((x) => x.id === id);
       if (!found) return res.redirect("/ocorrencias");
+
       ocorrencia = {
         id: found.id,
         cliente: found.razao_social,
@@ -776,12 +726,15 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
 
   try {
     if (USE_DB) {
-      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [status, responsavel, id]);
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [
+        status,
+        responsavel,
         id,
-        req.session.user.nome,
-        `Atualizou: status=${status}, responsável=${responsavel}.`,
       ]);
+      await pool.query(
+        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+        [id, req.session.user.nome, `Atualizou: status=${status}, responsável=${responsavel}.`]
+      );
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -789,7 +742,11 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
         o.responsavel = responsavel;
         o.updated_at = nowISO();
         o.atividades = o.atividades || [];
-        o.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: `Atualizou: status=${status}, responsável=${responsavel}.` });
+        o.atividades.unshift({
+          quando: "agora",
+          quem: req.session.user.nome,
+          texto: `Atualizou: status=${status}, responsável=${responsavel}.`,
+        });
       }
     }
 
@@ -810,7 +767,10 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   try {
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET updated_at=NOW() WHERE id=$1`, [id]);
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [id, req.session.user.nome, comentario]);
+      await pool.query(
+        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+        [id, req.session.user.nome, comentario]
+      );
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -841,11 +801,24 @@ app.get("/relatorios", requireAuth, async (req, res) => {
       const params = [];
       let idx = 1;
 
-      if (de) { where.push(`created_at >= $${idx++}`); params.push(`${de} 00:00:00`); }
-      if (ate) { where.push(`created_at <= $${idx++}`); params.push(`${ate} 23:59:59`); }
-      if (motivo) { where.push(`motivo = $${idx++}`); params.push(motivo); }
+      if (de) {
+        where.push(`created_at >= $${idx++}`);
+        params.push(`${de} 00:00:00`);
+      }
+      if (ate) {
+        where.push(`created_at <= $${idx++}`);
+        params.push(`${ate} 23:59:59`);
+      }
+      if (motivo) {
+        where.push(`motivo = $${idx++}`);
+        params.push(motivo);
+      }
 
-      const sql = `SELECT motivo, status, custo_estimado FROM ocorrencias ${where.length ? "WHERE " + where.join(" AND ") : ""}`;
+      const sql = `
+        SELECT motivo, status, custo_estimado
+        FROM ocorrencias
+        ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      `;
       const r = await pool.query(sql, params);
       rows = r.rows;
     } else {
@@ -857,12 +830,22 @@ app.get("/relatorios", requireAuth, async (req, res) => {
     const custoTotal = rows.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0);
 
     const porMotivo = { IVPLAST: 0, Cliente: 0, Transportadora: 0, Vendedor: 0 };
-    rows.forEach((o) => { const m = String(o.motivo || ""); if (porMotivo[m] !== undefined) porMotivo[m] += 1; });
+    rows.forEach((o) => {
+      const m = String(o.motivo || "");
+      if (porMotivo[m] !== undefined) porMotivo[m] += 1;
+    });
 
     res.render("relatorios", {
       usuario: req.session.user,
-      resumoRelatorio: { abertas: abertas || 2, resolvidas: resolvidas || 15, custoTotal: custoTotal || 35340, porMotivo },
-      de, ate, motivo,
+      resumoRelatorio: {
+        abertas: abertas || 2,
+        resolvidas: resolvidas || 15,
+        custoTotal: custoTotal || 35340,
+        porMotivo,
+      },
+      de,
+      ate,
+      motivo,
     });
   } catch (err) {
     console.error("RELATORIOS_ERR:", err);
@@ -918,10 +901,20 @@ app.post("/configuracoes/senha", requireAuth, async (req, res) => {
     };
 
     if (!novaSenha || novaSenha.length < 6) {
-      return res.render("configuracoes", { usuario: req.session.user, config, success: null, error: "Senha inválida (mínimo 6 caracteres)." });
+      return res.render("configuracoes", {
+        usuario: req.session.user,
+        config,
+        success: null,
+        error: "Senha inválida (mínimo 6 caracteres).",
+      });
     }
     if (novaSenha !== novaSenha2) {
-      return res.render("configuracoes", { usuario: req.session.user, config, success: null, error: "As senhas não conferem." });
+      return res.render("configuracoes", {
+        usuario: req.session.user,
+        config,
+        success: null,
+        error: "As senhas não conferem.",
+      });
     }
 
     const hash = await bcrypt.hash(novaSenha, 10);
@@ -989,3 +982,4 @@ const PORT = process.env.PORT || 3000;
     process.exit(1);
   }
 })();
+
