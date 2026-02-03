@@ -1,162 +1,249 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-br">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>IVPLAST | Detalhe da Ocorrência</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <meta charset="utf-8">
+  <title>Ocorrência #<%= ocorrencia.id %> - IVPLAST</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <style>
-    body{background:#f3f5f7;}
-    .app{display:flex;min-height:100vh;}
-    .sidebar{width:260px;background:#fff;border-right:1px solid #e9ecef;padding:18px 14px;position:sticky;top:0;height:100vh;}
-    .nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;color:#344054;text-decoration:none;}
-    .nav a:hover{background:#f2f4f7;}
-    .nav a.active{background:#e8f2ff;color:#0b5ed7;font-weight:600;}
-    .content{flex:1;padding:22px;}
-    .panel{border:0;border-radius:14px;box-shadow:0 8px 22px rgba(0,0,0,.06);}
-    .topbar{background:#fff;border:1px solid #e9ecef;border-radius:14px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.04);margin-bottom:18px;}
-    .btn-primary{background:#1177cc;border-color:#1177cc;}
-    .timeline{border-left:2px solid #e9ecef;padding-left:14px;}
-    .dot{width:10px;height:10px;border-radius:50%;background:#1177cc;display:inline-block;margin-left:-20px;margin-right:10px;}
-    .muted{color:#667085;}
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f6fb;color:#0f172a}
+    .layout{display:flex;min-height:100vh}
+    .sidebar{width:250px;background:#fff;border-right:1px solid #e5e7eb;padding:18px}
+    .logo{font-weight:800;color:#2563eb;margin-bottom:20px}
+    .menu a{display:block;padding:10px 12px;border-radius:8px;color:#111;text-decoration:none;margin-bottom:6px}
+    .menu a:hover{background:#f1f5f9}
+    .menu a.active{background:#eef2ff;color:#1d4ed8;font-weight:600}
+    .content{flex:1;padding:24px}
+    .top{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;justify-content:space-between}
+    h1{margin:0;font-size:20px}
+    .sub{margin:4px 0 0;color:#64748b;font-size:13px}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid #e5e7eb;background:#fff}
+    .pill.open{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+    .pill.done{background:#ecfdf5;border-color:#bbf7d0;color:#166534}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:14px}
+    .section{font-weight:800;font-size:14px;margin:0 0 10px}
+    label{display:block;font-size:13px;margin:10px 0 6px;color:#334155}
+    input,select,textarea{
+      width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px
+    }
+    textarea{min-height:110px;resize:vertical}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:700}
+    .btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+    .btn.danger{background:#ef4444;color:#fff;border-color:#ef4444}
+    .hint{font-size:12px;color:#64748b;margin-top:4px}
+    .line{height:1px;background:#e5e7eb;margin:12px 0}
+    .activity{border:1px solid #e5e7eb;border-radius:10px;padding:10px;margin-top:10px;background:#fff}
+    .activity .meta{font-size:12px;color:#64748b;margin-bottom:6px}
+    .activity .txt{font-size:14px;color:#0f172a;white-space:pre-wrap}
+    .muted{color:#64748b}
+    .rightInfo{font-size:13px;color:#64748b}
+    a.link{color:#2563eb;text-decoration:none}
+    a.link:hover{text-decoration:underline}
+    .k{font-size:12px;color:#64748b}
+    .v{font-size:14px;font-weight:700;color:#0f172a}
+    .kv{display:flex;flex-direction:column;gap:2px}
+    @media(max-width:900px){
+      .sidebar{display:none}
+      .grid,.grid3{grid-template-columns:1fr}
+      .content{padding:14px}
+      .top{flex-direction:column}
+    }
   </style>
 </head>
-<body>
-<%
-  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Raphael" };
-  const o = (typeof ocorrencia !== 'undefined' && ocorrencia) ? ocorrencia : {
-    id: (typeof id !== 'undefined' ? id : 11024),
-    cliente: "LIMA E SILVA COMERCIAL LTDA",
-    criadoEm: "2026-02-03",
-    status: "Em andamento",
-    motivo: "Cliente",
-    tipo: "Comercial",
-    pedido: "224483",
-    nf: "13052",
-    custo: 350.00,
-    responsavel: "Atendimento",
-    descricao: "Exemplo de descrição da ocorrência. Aqui entra todo o texto do ocorrido.",
-    atividades: [
-      { quando:"há 2 dias", quem:"Sistema", texto:"Ocorrência criada." },
-      { quando:"há 1 dia", quem:"Atendimento", texto:"Solicitado evidências (fotos/prints)." }
-    ]
-  };
-%>
 
-<div class="app">
+<body>
+<div class="layout">
+
+  <!-- MENU -->
   <aside class="sidebar">
-    <div class="d-flex align-items-center gap-2 px-2 mb-3">
-      <img src="https://dummyimage.com/120x34/ffffff/1177cc.png&text=IVPLAST" style="height:34px;" alt="IVPLAST">
-      <div>
-        <div class="fw-semibold">IVPLAST</div>
-        <div class="small text-secondary">Ocorrências</div>
-      </div>
-    </div>
-    <div class="nav flex-column">
+    <div class="logo">IVPLAST</div>
+    <div class="menu">
       <a href="/dashboard">🏠 Menu Principal</a>
       <a href="/novo">➕ Novo</a>
-      <a class="active" href="/ocorrencias">🔎 Busca por Ocorrência</a>
+      <a href="/ocorrencias" class="active">🔍 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
       <a href="/configuracoes">⚙️ Configurações</a>
       <a href="/auditoria">🧾 Auditoria</a>
-      <hr class="my-2"/>
       <a href="/logout">🚪 Sair</a>
     </div>
   </aside>
 
   <main class="content">
-    <div class="topbar d-flex justify-content-between align-items-center">
+
+    <% 
+      const role = String((usuario && usuario.role) ? usuario.role : "").toLowerCase();
+      const canSeeCost = ["admin","financeiro","diretoria"].includes(role);
+      const st = String(ocorrencia.status || "Aberto").toLowerCase();
+    %>
+
+    <div class="top">
       <div>
-        <div class="small text-secondary">Menu Principal / Ocorrências / #<%= o.id %></div>
-        <div class="fw-semibold"><%= o.cliente %></div>
-        <div class="small muted">Criado em <%= o.criadoEm %> • Pedido <%= o.pedido %> • NF <%= o.nf %></div>
+        <div class="sub">
+          <a class="link" href="/dashboard">Menu Principal</a>
+          <span class="muted"> / </span>
+          <a class="link" href="/ocorrencias">Ocorrências</a>
+          <span class="muted"> / </span>
+          <b>#<%= ocorrencia.id %></b>
+        </div>
+        <h1><%= ocorrencia.cliente %></h1>
+        <div class="sub">Criado em: <b><%= ocorrencia.criadoEm %></b></div>
       </div>
-      <div class="d-flex gap-2 align-items-center">
-        <% if (o.status === "Aberto") { %>
-          <span class="badge text-bg-danger">Aberto</span>
-        <% } else if (o.status === "Resolvido") { %>
-          <span class="badge text-bg-success">Resolvido</span>
-        <% } else { %>
-          <span class="badge text-bg-warning">Em andamento</span>
-        <% } %>
-        <a class="btn btn-outline-secondary btn-sm" href="/ocorrencias">Voltar</a>
+
+      <div style="text-align:right">
+        <div class="rightInfo">Logado como: <b><%= usuario.nome %></b></div>
+        <div style="margin-top:8px">
+          <% if (st === "resolvido") { %>
+            <span class="pill done">Resolvido</span>
+          <% } else { %>
+            <span class="pill open"><%= ocorrencia.status %></span>
+          <% } %>
+        </div>
       </div>
     </div>
 
-    <div class="row g-3">
-      <div class="col-lg-7">
-        <div class="card panel">
-          <div class="card-body">
-            <div class="fw-semibold mb-2">Detalhes</div>
+    <div class="grid">
 
-            <div class="row g-2 small">
-              <div class="col-md-6"><span class="text-secondary">Tipo:</span> <b><%= o.tipo %></b></div>
-              <div class="col-md-6"><span class="text-secondary">Motivo:</span> <b><%= o.motivo %></b></div>
-              <div class="col-md-6"><span class="text-secondary">Responsável:</span> <b><%= o.responsavel %></b></div>
-              <div class="col-md-6"><span class="text-secondary">Custo estimado:</span> <b>R$ <%= Number(o.custo||0).toLocaleString('pt-BR',{minimumFractionDigits:2}) %></b></div>
-            </div>
+      <!-- Dados principais -->
+      <div class="card">
+        <div class="section">Dados da ocorrência</div>
 
-            <hr/>
-            <div class="fw-semibold mb-1">Descrição</div>
-            <div class="text-secondary"><%= o.descricao %></div>
-
-            <hr/>
-            <div class="fw-semibold mb-2">Ações rápidas</div>
-
-            <form method="POST" action="/ocorrencias/<%= o.id %>/atualizar" class="row g-2">
-              <div class="col-md-4">
-                <select name="status" class="form-select form-select-sm">
-                  <option value="Aberto" <%= o.status==="Aberto" ? "selected":"" %>>Aberto</option>
-                  <option value="Em andamento" <%= o.status==="Em andamento" ? "selected":"" %>>Em andamento</option>
-                  <option value="Resolvido" <%= o.status==="Resolvido" ? "selected":"" %>>Resolvido</option>
-                </select>
-              </div>
-              <div class="col-md-4">
-                <select name="responsavel" class="form-select form-select-sm">
-                  <option value="Atendimento" <%= o.responsavel==="Atendimento" ? "selected":"" %>>Atendimento</option>
-                  <option value="Logistica" <%= o.responsavel==="Logistica" ? "selected":"" %>>Logística</option>
-                  <option value="Compras" <%= o.responsavel==="Compras" ? "selected":"" %>>Compras</option>
-                  <option value="Qualidade" <%= o.responsavel==="Qualidade" ? "selected":"" %>>Qualidade</option>
-                  <option value="Diretoria" <%= o.responsavel==="Diretoria" ? "selected":"" %>>Diretoria</option>
-                </select>
-              </div>
-              <div class="col-md-4 d-grid">
-                <button class="btn btn-primary btn-sm" type="submit">Salvar alteração</button>
-              </div>
-            </form>
-
-            <form method="POST" action="/ocorrencias/<%= o.id %>/comentario" class="mt-3">
-              <label class="form-label small">Adicionar comentário</label>
-              <textarea name="comentario" class="form-control" rows="3" placeholder="Descreva a atualização..."></textarea>
-              <button class="btn btn-outline-primary btn-sm mt-2" type="submit">Adicionar</button>
-            </form>
+        <div class="grid3">
+          <div class="kv">
+            <div class="k">Empresa do problema</div>
+            <div class="v"><%= ocorrencia.empresa || "-" %></div>
           </div>
+          <div class="kv">
+            <div class="k">Motivo / Origem</div>
+            <div class="v"><%= ocorrencia.motivo || "-" %></div>
+          </div>
+          <div class="kv">
+            <div class="k">Responsável</div>
+            <div class="v"><%= ocorrencia.responsavel || "-" %></div>
+          </div>
+        </div>
+
+        <div class="line"></div>
+
+        <div class="grid3">
+          <div class="kv">
+            <div class="k">Pedido</div>
+            <div class="v"><%= ocorrencia.pedido || "-" %></div>
+          </div>
+          <div class="kv">
+            <div class="k">Nota Fiscal</div>
+            <div class="v"><%= ocorrencia.nf || "-" %></div>
+          </div>
+          <div class="kv">
+            <div class="k">NFD</div>
+            <div class="v"><%= ocorrencia.nfd || "-" %></div>
+          </div>
+        </div>
+
+        <div class="line"></div>
+
+        <div class="grid3">
+          <div class="kv">
+            <div class="k">Item errado?</div>
+            <div class="v"><%= (ocorrencia.item_errado ? "Sim" : "Não") %></div>
+          </div>
+          <div class="kv">
+            <div class="k">Item</div>
+            <div class="v"><%= ocorrencia.item_descricao || "-" %></div>
+          </div>
+          <div class="kv">
+            <div class="k">Quantidade</div>
+            <div class="v"><%= (ocorrencia.item_quantidade !== undefined && ocorrencia.item_quantidade !== null) ? ocorrencia.item_quantidade : "-" %></div>
+          </div>
+        </div>
+
+        <div style="margin-top:10px">
+          <div class="k">Observação do item</div>
+          <div class="v" style="font-size:13px;font-weight:600"><%= ocorrencia.item_obs || "-" %></div>
+        </div>
+
+        <% if (canSeeCost) { %>
+          <div class="line"></div>
+          <div class="kv">
+            <div class="k">Custo estimado</div>
+            <div class="v">R$ <%= (Number(ocorrencia.custo || 0)).toFixed(2).replace(".", ",") %></div>
+          </div>
+        <% } %>
+
+        <div class="line"></div>
+
+        <div>
+          <div class="k">Descrição</div>
+          <div class="v" style="font-size:14px;font-weight:600;white-space:pre-wrap"><%= ocorrencia.descricao %></div>
         </div>
       </div>
 
-      <div class="col-lg-5">
-        <div class="card panel">
-          <div class="card-body">
-            <div class="fw-semibold mb-2">Histórico</div>
-            <div class="timeline">
-              <% (o.atividades || []).forEach(a => { %>
-                <div class="mb-3">
-                  <div class="small">
-                    <span class="dot"></span>
-                    <b><%= a.quem %></b> <span class="text-secondary">• <%= a.quando %></span>
-                  </div>
-                  <div class="text-secondary small ms-1"><%= a.texto %></div>
-                </div>
-              <% }) %>
-            </div>
-            <div class="small muted mt-2">Logado como <b><%= user.nome %></b></div>
+      <!-- Ações / Status / Responsável -->
+      <div class="card">
+        <div class="section">Ações</div>
+
+        <form method="POST" action="/ocorrencias/<%= ocorrencia.id %>/atualizar">
+          <label>Status</label>
+          <select name="status">
+            <option value="Aberto" <%= String(ocorrencia.status)==="Aberto" ? "selected" : "" %>>Aberto</option>
+            <option value="Em análise" <%= String(ocorrencia.status)==="Em análise" ? "selected" : "" %>>Em análise</option>
+            <option value="Aguardando cliente" <%= String(ocorrencia.status)==="Aguardando cliente" ? "selected" : "" %>>Aguardando cliente</option>
+            <option value="Aguardando fábrica" <%= String(ocorrencia.status)==="Aguardando fábrica" ? "selected" : "" %>>Aguardando fábrica</option>
+            <option value="Em transporte" <%= String(ocorrencia.status)==="Em transporte" ? "selected" : "" %>>Em transporte</option>
+            <option value="Resolvido" <%= String(ocorrencia.status)==="Resolvido" ? "selected" : "" %>>Resolvido</option>
+          </select>
+
+          <label>Responsável</label>
+          <select name="responsavel">
+            <option value="Atendimento" <%= String(ocorrencia.responsavel)==="Atendimento" ? "selected" : "" %>>Atendimento</option>
+            <option value="Comercial" <%= String(ocorrencia.responsavel)==="Comercial" ? "selected" : "" %>>Comercial</option>
+            <option value="Qualidade" <%= String(ocorrencia.responsavel)==="Qualidade" ? "selected" : "" %>>Qualidade</option>
+            <option value="Logística" <%= String(ocorrencia.responsavel)==="Logística" ? "selected" : "" %>>Logística</option>
+            <option value="Financeiro" <%= String(ocorrencia.responsavel)==="Financeiro" ? "selected" : "" %>>Financeiro</option>
+            <option value="Diretoria" <%= String(ocorrencia.responsavel)==="Diretoria" ? "selected" : "" %>>Diretoria</option>
+          </select>
+
+          <div class="actions">
+            <a class="btn" href="/ocorrencias">Voltar</a>
+            <button class="btn primary" type="submit">Salvar alterações</button>
           </div>
-        </div>
+
+          <div class="hint">Dica: use “Aguardando cliente/fábrica” para manter controle real do que está pendente.</div>
+        </form>
+
+        <div class="line"></div>
+
+        <div class="section">Novo comentário</div>
+        <form method="POST" action="/ocorrencias/<%= ocorrencia.id %>/comentario">
+          <label>Comentário</label>
+          <textarea name="comentario" placeholder="Escreva uma atualização..."></textarea>
+          <div class="actions">
+            <button class="btn primary" type="submit">Adicionar comentário</button>
+          </div>
+        </form>
       </div>
+
+    </div>
+
+    <!-- Atividades -->
+    <div class="card">
+      <div class="section">Atividades</div>
+
+      <% if (!ocorrencia.atividades || ocorrencia.atividades.length === 0) { %>
+        <div class="muted">Nenhuma atividade registrada ainda.</div>
+      <% } else { %>
+        <% ocorrencia.atividades.forEach((a) => { %>
+          <div class="activity">
+            <div class="meta"><b><%= a.quem %></b> • <%= a.quando %></div>
+            <div class="txt"><%= a.texto %></div>
+          </div>
+        <% }) %>
+      <% } %>
     </div>
 
   </main>
 </div>
 </body>
 </html>
-
