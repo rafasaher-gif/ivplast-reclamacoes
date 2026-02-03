@@ -37,8 +37,13 @@
     .radioCompact label{margin:0;font-size:13px;color:#0f172a}
     .radioCompact input{width:auto}
 
-    /* linha compacta 3 colunas (NFD + número + item errado) */
-    .gridNFD{display:grid;grid-template-columns: 220px 1fr 220px; gap:14px; align-items:end}
+    /* ✅ linha NFD: mais espaço e NFD menor */
+    .gridNFD{
+      display:grid;
+      grid-template-columns: 240px 180px 1fr;
+      gap:18px;
+      align-items:end;
+    }
 
     /* itens (linha item + qtd lado a lado + remover) */
     .itemRow{display:grid;grid-template-columns: 1fr 160px 44px; gap:10px; margin-bottom:10px}
@@ -51,12 +56,16 @@
     /* custo menor */
     .costSmall input{max-width:180px}
 
+    /* inputs compactos */
+    .inputSmall{max-width:180px}
+
     @media(max-width:980px){
       .sidebar{display:none}
       .grid,.grid3,.gridNFD{grid-template-columns:1fr}
       .itemRow{grid-template-columns:1fr 1fr 44px}
       .content{padding:14px}
       .costSmall input{max-width:100%}
+      .inputSmall{max-width:100%}
     }
   </style>
 </head>
@@ -97,7 +106,15 @@
           </div>
           <div>
             <label>CNPJ</label>
-            <input name="cnpj">
+            <input
+              id="cnpj"
+              name="cnpj"
+              maxlength="18"
+              placeholder="00.000.000/0000-00"
+              inputmode="numeric"
+              autocomplete="off"
+            >
+            <div class="hint">Formato: 00.000.000/0000-00</div>
           </div>
         </div>
 
@@ -172,7 +189,7 @@
 
         <div class="section">NFD e itens</div>
 
-        <!-- linha compacta: NFD? + Número + Item errado? -->
+        <!-- linha: NFD? + Número (menor) + Item errado? -->
         <div class="gridNFD">
           <div>
             <label>Cliente já emitiu NFD?</label>
@@ -184,7 +201,15 @@
 
           <div>
             <label>Número da NFD</label>
-            <input id="nfd" name="nfd_numero" disabled>
+            <input
+              id="nfd"
+              name="nfd_numero"
+              class="inputSmall"
+              disabled
+              inputmode="numeric"
+              maxlength="10"
+              placeholder="Até 10 dígitos"
+            >
           </div>
 
           <div>
@@ -229,7 +254,7 @@
 </div>
 
 <script>
-  // NFD: habilita campo número
+  // NFD: habilita campo número + limpa se "Não"
   function toggleNFD(){
     const sim = document.querySelector('input[name="cliente_emitiu_nfd"][value="sim"]').checked;
     const nfd = document.getElementById("nfd");
@@ -238,6 +263,16 @@
   }
   document.querySelectorAll('input[name="cliente_emitiu_nfd"]').forEach(e=>e.addEventListener("change",toggleNFD));
   toggleNFD();
+
+  // Forçar NFD apenas números e máximo 10
+  (function(){
+    const nfd = document.getElementById("nfd");
+    if (!nfd) return;
+    nfd.addEventListener("input", (e) => {
+      const digits = String(e.target.value || "").replace(/\D/g, "").slice(0, 10);
+      e.target.value = digits;
+    });
+  })();
 
   // Itens: habilita bloco e permite até 10
   (function(){
@@ -310,6 +345,32 @@
 
     // estado inicial
     setEnabled(false);
+  })();
+
+  // Máscara CNPJ: 00.000.000/0000-00
+  (function(){
+    const el = document.getElementById("cnpj");
+    if (!el) return;
+
+    function formatCNPJ(v){
+      const digits = String(v || "").replace(/\D/g, "").slice(0, 14);
+      let out = digits;
+
+      if (digits.length > 2) out = digits.slice(0,2) + "." + digits.slice(2);
+      if (digits.length > 5) out = out.slice(0,6) + "." + out.slice(6);
+      if (digits.length > 8) out = out.slice(0,10) + "/" + out.slice(10);
+      if (digits.length > 12) out = out.slice(0,15) + "-" + out.slice(15);
+
+      return out;
+    }
+
+    el.addEventListener("input", (e) => {
+      e.target.value = formatCNPJ(e.target.value);
+    });
+
+    el.addEventListener("blur", (e) => {
+      e.target.value = formatCNPJ(e.target.value);
+    });
   })();
 </script>
 
