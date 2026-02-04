@@ -29,15 +29,13 @@
 
   const listUsers = (typeof users !== 'undefined' && Array.isArray(users)) ? users : [];
 
+  // ✅ SOMENTE CARGOS PERMITIDOS (mantém "diretor" como value para bater com o backend)
   const roles = [
-    { value: "user", label: "Usuário" },
     { value: "atendimento", label: "Atendimento" },
-    { value: "comercial", label: "Comercial" },
-    { value: "qualidade", label: "Qualidade" },
-    { value: "logistica", label: "Logística" },
-    { value: "financeiro", label: "Financeiro" },
-    { value: "admin", label: "Admin" },
-    { value: "diretor", label: "Diretor(a)" }
+    { value: "comercial",   label: "Comercial" },
+    { value: "financeiro",  label: "Financeiro" },
+    { value: "admin",       label: "Admin" },
+    { value: "diretor",     label: "Diretor(a)" }
   ];
 
   function fmtDate(v){
@@ -55,9 +53,11 @@
     return true;
   }
 
+  // ✅ fallback: se vier algum role antigo no banco (ex.: user/logistica/qualidade), mostra "Atendimento" por padrão
   function roleLabel(v){
-    const r = roles.find(x => x.value === String(v||"").toLowerCase());
-    return r ? r.label : (v || "-");
+    const vv = String(v||"").toLowerCase();
+    const r = roles.find(x => x.value === vv);
+    return r ? r.label : "Atendimento";
   }
 %>
 
@@ -434,3 +434,4 @@
 </script>
 </body>
 </html>
+
