@@ -34,17 +34,21 @@
 </head>
 <body>
 <%
-  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Raphael" };
+  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Raphael", role: "" };
   const stats = (typeof kpis !== 'undefined' && kpis) ? kpis : {
-    totalOcorrencias: 17,
-    abertas: 2,
-    tempoMedioHoras: 26,
-    valorEstimado: 35340
+    totalOcorrencias: 0,
+    abertas: 0,
+    tempoMedioHoras: 0,
+    valorEstimado: 0
   };
-  const ocorrenciasPorSemana = (typeof serieSemanal !== 'undefined' && serieSemanal) ? serieSemanal : [0,0,1,2,6,3,5,2,2,2,4];
+  const ocorrenciasPorSemana = (typeof serieSemanal !== 'undefined' && serieSemanal) ? serieSemanal : [0,0,0,0,0,0,0,0,0,0,0];
   const motivos = (typeof motivosOcorrencia !== 'undefined' && motivosOcorrencia) ? motivosOcorrencia : {
-    "IVPLAST": 6, "Cliente": 5, "Transportadora": 4, "Vendedor": 2
+    "IVPLAST": 0, "Cliente": 0, "Transportadora": 0, "Vendedor": 0
   };
+
+  const role = (user && user.role) ? String(user.role).toLowerCase() : '';
+  const canCreate = role !== 'financeiro';
+  const canSeeAdminMenus = (role === 'admin' || role === 'diretor');
 %>
 
 <div class="app">
@@ -59,11 +63,17 @@
 
     <div class="nav flex-column">
       <a class="active" href="/dashboard">🏠 Menu Principal</a>
-      <a href="/novo">➕ Novo</a>
+      <% if (canCreate) { %>
+        <a href="/novo">➕ Novo</a>
+      <% } %>
       <a href="/ocorrencias">🔎 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
-      <a href="/configuracoes">⚙️ Configurações</a>
-      <a href="/auditoria">🧾 Auditoria</a>
+
+      <% if (canSeeAdminMenus) { %>
+        <a href="/configuracoes">⚙️ Configurações</a>
+        <a href="/auditoria">🧾 Auditoria</a>
+      <% } %>
+
       <hr class="my-2"/>
       <a href="/logout">🚪 Sair</a>
     </div>
@@ -155,7 +165,6 @@
 </div>
 
 <script>
-  // Linha
   const semanaLabels = Array.from({length: <%= ocorrenciasPorSemana.length %>}, (_,i)=>`S${i+1}`);
   new Chart(document.getElementById('chartSemana'), {
     type: 'line',
@@ -177,7 +186,6 @@
     }
   });
 
-  // Donut
   const motivoObj = <%- JSON.stringify(motivos) %>;
   new Chart(document.getElementById('chartMotivo'), {
     type: 'doughnut',
