@@ -127,9 +127,12 @@ function canViewAllOcorrencias(req) {
   return isAdmin(req) || isDirector(req);
 }
 
-function requireDirector(req, res, next) {
+// ✅ Config/Auditoria/Usuários: Admin OU Diretor
+function requireAdminOrDirector(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
-  if (!isDirector(req)) return res.status(403).send("Acesso negado. Apenas Diretor(a).");
+  if (!(isAdmin(req) || isDirector(req))) {
+    return res.status(403).send("Acesso negado. Apenas Admin ou Diretor(a).");
+  }
   next();
 }
 
@@ -200,6 +203,7 @@ function ensureMockUserFromEnv(kind) {
       email,
       senha_hash: hash,
       role,
+      active: true, // ✅
       created_at: nowISO(),
     });
   }
@@ -255,6 +259,7 @@ async function dbInit() {
       email TEXT UNIQUE NOT NULL,
       senha_hash TEXT,
       role TEXT NOT NULL DEFAULT 'user',
+      active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
@@ -262,6 +267,7 @@ async function dbInit() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS senha_hash TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
 
   await pool.query(`
@@ -384,7 +390,7 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'admin')`, [
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'admin',true)`, [
         adminName, adminEmail, hash,
       ]);
       console.log("✅ Admin criado via ENV.");
@@ -392,7 +398,7 @@ async function dbInit() {
       const id = existing.rows[0].id;
       await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [adminName, id]);
       await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
-      await pool.query(`UPDATE users SET role = 'admin' WHERE id=$1`, [id]);
+      await pool.query(`UPDATE users SET role = 'admin', active=true WHERE id=$1`, [id]);
       console.log("✅ Admin atualizado via ENV (senha reset).");
     }
   }
@@ -407,7 +413,7 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'diretor')`, [
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'diretor',true)`, [
         dirName, dirEmail, hash,
       ]);
       console.log("✅ Diretor criado via ENV.");
@@ -415,7 +421,7 @@ async function dbInit() {
       const id = existing.rows[0].id;
       await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [dirName, id]);
       await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
-      await pool.query(`UPDATE users SET role = 'diretor' WHERE id=$1`, [id]);
+      await pool.query(`UPDATE users SET role = 'diretor', active=true WHERE id=$1`, [id]);
       console.log("✅ Diretor atualizado via ENV (senha reset).");
     }
   }
@@ -453,7 +459,7 @@ app.post("/login", async (req, res) => {
 
     if (USE_DB) {
       const r = await pool.query(
-        `SELECT id, nome, email, senha_hash, role
+        `SELECT id, nome, email, senha_hash, role, active
          FROM users
          WHERE LOWER(email)=$1
          LIMIT 1`,
@@ -465,6 +471,10 @@ app.post("/login", async (req, res) => {
     }
 
     if (!user || !user.senha_hash) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
+
+    // ✅ bloqueia usuário inativo
+    const isActive = (user.active === undefined) ? true : !!user.active;
+    if (!isActive) return res.status(403).render("login", { error: "Usuário inativo. Fale com o administrador." });
 
     const ok = await bcrypt.compare(senha, user.senha_hash);
     if (!ok) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
@@ -508,14 +518,14 @@ app.post("/register", async (req, res) => {
         return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       }
       await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'user')`,
+        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'user',true)`,
         [nome, email, hash]
       );
     } else {
       const exists = mock.users.find((u) => u.email.toLowerCase() === email);
       if (exists) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       const id = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
-      mock.users.push({ id, nome, email, senha_hash: hash, role: "user", created_at: nowISO() });
+      mock.users.push({ id, nome, email, senha_hash: hash, role: "user", active: true, created_at: nowISO() });
     }
 
     await auditLog(nome, "Registro", `email=${email}`);
@@ -549,7 +559,6 @@ app.get("/dashboard", requireAuth, async (req, res) => {
     const motivos = { IVPLAST: 0, Cliente: 0, Transportadora: 0, Vendedor: 0 };
 
     if (USE_DB) {
-      // ✅ permissão: admin/diretor vê tudo; outros só as próprias
       let q = `SELECT motivo, status, custo_estimado, created_at, updated_at FROM ocorrencias`;
       const params = [];
       if (!canViewAllOcorrencias(req)) {
@@ -583,7 +592,6 @@ app.get("/dashboard", requireAuth, async (req, res) => {
       tempoMedioHoras = tempos.length ? Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length) : 0;
     }
 
-    // ✅ Custos: TODOS visualizam => sempre true
     res.render("dashboard", {
       usuario: req.session.user,
       kpis: {
@@ -610,7 +618,6 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
     let lista = [];
 
     if (USE_DB) {
-      // ✅ permissão: admin/diretor vê tudo; outros só as próprias
       let sql = `
         SELECT id, razao_social, created_at, updated_at, status, created_by
         FROM ocorrencias
@@ -665,7 +672,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 app.get("/novo", requireAuth, (req, res) => {
   res.render("novo", {
     usuario: req.session.user,
-    canSeeCost: true, // ✅ TODOS veem custo
+    canSeeCost: true,
     error: null,
     success: null
   });
@@ -697,7 +704,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       cliente_emitiu_nfd: String(req.body.cliente_emitiu_nfd || "nao") === "sim",
       nfd_numero: String(req.body.nfd_numero || "").trim(),
 
-      // ✅ FIX legado
       tipo: "Comercial",
 
       descricao: String(req.body.descricao || "").trim(),
@@ -842,7 +848,7 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
   if (!ocorrenciaId || !anexoId) return res.status(400).send("Parâmetros inválidos.");
 
   try {
-    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
+    // permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         ocorrenciaId,
@@ -890,7 +896,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
   if (!id) return res.redirect("/ocorrencias");
 
   try {
-    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
+    // permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         id,
@@ -993,7 +999,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       itens,
       anexos,
       id,
-      canSeeCost: true, // ✅ TODOS veem custo
+      canSeeCost: true,
       isDirector: isDirector(req),
     });
   } catch (err) {
@@ -1010,13 +1016,11 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
   const status = String(req.body.status || "").trim() || "Aberto";
   const responsavel = String(req.body.responsavel || "").trim() || "Atendimento";
 
-  // ✅ regra: somente diretor pode marcar "Resolvido"
   if (normalizeStatus(status) === "resolvido" && !isDirector(req)) {
     return res.status(403).send("Apenas Diretor(a) pode alterar o status para 'Resolvido'.");
   }
 
   try {
-    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         id,
@@ -1069,7 +1073,6 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   if (!comentario) return res.redirect(`/ocorrencias/${id}`);
 
   try {
-    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         id,
@@ -1113,22 +1116,195 @@ app.get("/relatorios", requireAuth, async (req, res) => {
   }
 });
 
-/* ✅ Só Diretor: Configurações e Auditoria */
-app.get("/configuracoes", requireDirector, async (req, res) => {
+/* ✅ Configurações e Auditoria: Admin OU Diretor */
+app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
   try {
     const config = {
       adminEmail: await getSetting("adminEmail", process.env.ADMIN_EMAIL || ""),
       adminName: await getSetting("adminName", process.env.ADMIN_NAME || ""),
       databaseSSL: envBool(await getSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)))),
     };
-    res.render("configuracoes", { usuario: req.session.user, config, success: null, error: null });
+
+    // ✅ lista de usuários (para você gerenciar no painel)
+    let users = [];
+    if (USE_DB) {
+      const r = await pool.query(`SELECT id, nome, email, role, active, created_at FROM users ORDER BY nome ASC`);
+      users = r.rows;
+    } else {
+      users = mock.users.slice().sort((a,b)=>String(a.nome).localeCompare(String(b.nome)));
+    }
+
+    res.render("configuracoes", { usuario: req.session.user, config, users, success: null, error: null });
   } catch (err) {
     console.error("CFG_GET_ERR:", err);
     res.status(500).send("Erro ao carregar configurações.");
   }
 });
 
-app.get("/auditoria", requireDirector, async (req, res) => {
+/* ✅ POST /configuracoes/admin (seu EJS chama isso) */
+app.post("/configuracoes/admin", requireAdminOrDirector, async (req, res) => {
+  try {
+    const adminEmail = String(req.body.adminEmail || "").trim();
+    const adminName  = String(req.body.adminName || "").trim();
+
+    await upsertSetting("adminEmail", adminEmail);
+    await upsertSetting("adminName", adminName);
+
+    await auditLog(req.session.user.nome, "Atualizou configurações", "Admin (email/nome)");
+
+    // recarrega página
+    return res.redirect("/configuracoes");
+  } catch (err) {
+    console.error("CFG_ADMIN_POST_ERR:", err);
+    return res.status(500).send("Erro ao salvar configurações.");
+  }
+});
+
+/* ✅ POST /configuracoes/senha (seu EJS chama isso)
+   - Troca a senha do usuário logado (Admin/Diretor)
+*/
+app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
+  try {
+    const novaSenha  = String(req.body.novaSenha || "");
+    const novaSenha2 = String(req.body.novaSenha2 || "");
+
+    if (!novaSenha || novaSenha.length < 6) return res.status(400).send("Senha muito curta (mínimo 6).");
+    if (novaSenha !== novaSenha2) return res.status(400).send("As senhas não conferem.");
+
+    const hash = await bcrypt.hash(novaSenha, 10);
+
+    if (USE_DB) {
+      await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
+    } else {
+      const u = mock.users.find(x => x.id === req.session.user.id);
+      if (u) u.senha_hash = hash;
+    }
+
+    await auditLog(req.session.user.nome, "Alterou a própria senha", `userId=${req.session.user.id}`);
+    return res.redirect("/configuracoes");
+  } catch (err) {
+    console.error("CFG_SENHA_POST_ERR:", err);
+    return res.status(500).send("Erro ao alterar senha.");
+  }
+});
+
+/* ✅ Gestão de Usuários (Admin/Diretor)
+   - Criar usuário
+   - Trocar cargo
+   - Ativar/Desativar
+   - Resetar senha (não dá para “ver senha” atual)
+*/
+
+// criar usuário
+app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, res) => {
+  try {
+    const nome  = String(req.body.nome || "").trim();
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const role  = String(req.body.role || "user").trim();
+    const senha = String(req.body.senha || "");
+
+    if (!nome || !email || !senha) return res.status(400).send("Informe nome, email e senha.");
+    if (senha.length < 6) return res.status(400).send("Senha muito curta (mínimo 6).");
+
+    const hash = await bcrypt.hash(senha, 10);
+
+    if (USE_DB) {
+      const exists = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1`, [email]);
+      if (exists.rowCount) return res.status(409).send("Email já cadastrado.");
+
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`,
+        [nome, email, hash, role]
+      );
+    } else {
+      const exists = mock.users.find(u => u.email.toLowerCase() === email);
+      if (exists) return res.status(409).send("Email já cadastrado.");
+
+      const id = mock.users.length ? Math.max(...mock.users.map(u => u.id)) + 1 : 1;
+      mock.users.push({ id, nome, email, senha_hash: hash, role, active: true, created_at: nowISO() });
+    }
+
+    await auditLog(req.session.user.nome, "Criou usuário", `email=${email}, role=${role}`);
+    return res.redirect("/configuracoes");
+  } catch (err) {
+    console.error("USR_CREATE_ERR:", err);
+    return res.status(500).send("Erro ao criar usuário.");
+  }
+});
+
+// trocar cargo
+app.post("/configuracoes/usuarios/:id/role", requireAdminOrDirector, async (req, res) => {
+  try {
+    const id = safeInt(req.params.id, 0);
+    const role = String(req.body.role || "user").trim();
+    if (!id) return res.status(400).send("ID inválido.");
+
+    if (USE_DB) {
+      await pool.query(`UPDATE users SET role=$1 WHERE id=$2`, [role, id]);
+    } else {
+      const u = mock.users.find(x => x.id === id);
+      if (u) u.role = role;
+    }
+
+    await auditLog(req.session.user.nome, "Alterou cargo", `userId=${id} -> ${role}`);
+    return res.redirect("/configuracoes");
+  } catch (err) {
+    console.error("USR_ROLE_ERR:", err);
+    return res.status(500).send("Erro ao alterar cargo.");
+  }
+});
+
+// ativar/desativar
+app.post("/configuracoes/usuarios/:id/active", requireAdminOrDirector, async (req, res) => {
+  try {
+    const id = safeInt(req.params.id, 0);
+    const active = String(req.body.active || "true") === "true";
+    if (!id) return res.status(400).send("ID inválido.");
+
+    // evita se desativar sozinho
+    if (id === req.session.user.id && !active) return res.status(400).send("Você não pode desativar o próprio usuário.");
+
+    if (USE_DB) {
+      await pool.query(`UPDATE users SET active=$1 WHERE id=$2`, [active, id]);
+    } else {
+      const u = mock.users.find(x => x.id === id);
+      if (u) u.active = active;
+    }
+
+    await auditLog(req.session.user.nome, "Alterou status do usuário", `userId=${id}, active=${active}`);
+    return res.redirect("/configuracoes");
+  } catch (err) {
+    console.error("USR_ACTIVE_ERR:", err);
+    return res.status(500).send("Erro ao ativar/desativar usuário.");
+  }
+});
+
+// resetar senha
+app.post("/configuracoes/usuarios/:id/reset-senha", requireAdminOrDirector, async (req, res) => {
+  try {
+    const id = safeInt(req.params.id, 0);
+    const novaSenha = String(req.body.novaSenha || "");
+    if (!id) return res.status(400).send("ID inválido.");
+    if (!novaSenha || novaSenha.length < 6) return res.status(400).send("Senha muito curta (mínimo 6).");
+
+    const hash = await bcrypt.hash(novaSenha, 10);
+
+    if (USE_DB) {
+      await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, id]);
+    } else {
+      const u = mock.users.find(x => x.id === id);
+      if (u) u.senha_hash = hash;
+    }
+
+    await auditLog(req.session.user.nome, "Resetou senha", `userId=${id}`);
+    return res.redirect("/configuracoes");
+  } catch (err) {
+    console.error("USR_RESET_ERR:", err);
+    return res.status(500).send("Erro ao resetar senha.");
+  }
+});
+
+app.get("/auditoria", requireAdminOrDirector, async (req, res) => {
   try {
     let auditoria = [];
 
@@ -1171,4 +1347,3 @@ const PORT = process.env.PORT || 3000;
     process.exit(1);
   }
 })();
-
