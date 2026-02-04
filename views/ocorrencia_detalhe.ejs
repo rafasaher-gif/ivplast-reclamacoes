@@ -29,7 +29,6 @@
     textarea{min-height:110px;resize:vertical}
     .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:700}
     .btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}
-    .btn.danger{background:#ef4444;color:#fff;border-color:#ef4444}
     .btn[disabled]{opacity:.55;cursor:not-allowed}
     .hint{font-size:12px;color:#64748b;margin-top:8px}
     .line{height:1px;background:#e5e7eb;margin:12px 0}
@@ -44,10 +43,8 @@
     .v{font-size:14px;font-weight:700;color:#0f172a}
     .kv{display:flex;flex-direction:column;gap:2px}
 
-    /* cards de itens */
     .itemCard{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff}
 
-    /* anexos */
     .attachList{display:flex;flex-direction:column;gap:10px;margin-top:8px}
     .attachRow{
       display:flex;align-items:center;justify-content:space-between;gap:10px;
@@ -74,16 +71,17 @@
 <body>
 <div class="layout">
 
-  <!-- MENU -->
   <aside class="sidebar">
     <div class="logo">IVPLAST</div>
     <div class="menu">
       <a href="/dashboard">🏠 Menu Principal</a>
-      <a href="/novo">➕ Novo</a>
+      <% if (String(role||'') !== 'financeiro') { %>
+        <a href="/novo">➕ Novo</a>
+      <% } %>
       <a href="/ocorrencias" class="active">🔍 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
 
-      <% if (typeof isDirector !== "undefined" && isDirector) { %>
+      <% if (String(role||'') === "admin" || String(role||'') === "diretor") { %>
         <a href="/configuracoes">⚙️ Configurações</a>
         <a href="/auditoria">🧾 Auditoria</a>
       <% } %>
@@ -95,16 +93,14 @@
   <main class="content">
 
     <%
-      const st = String(ocorrencia.status || "Aberto").toLowerCase();
-
-      // Ajuste de texto: motivo IVPLAST exibe "Fábrica"
+      const st = String(ocorrencia.status || "Aberto");
       const motivoLabel = (String(ocorrencia.motivo || "") === "IVPLAST") ? "Fábrica" : (ocorrencia.motivo || "-");
+      const showCost = (typeof canSeeCost === "undefined") ? false : !!canSeeCost;
 
-      // custo: o server manda canSeeCost=true sempre (todos veem)
-      const showCost = (typeof canSeeCost === "undefined") ? true : !!canSeeCost;
+      const canEdit = (typeof canEditStatus === "undefined") ? false : !!canEditStatus;
+      const allowed = (typeof allowedStatuses !== "undefined" && Array.isArray(allowedStatuses)) ? allowedStatuses : [st];
 
-      // diretor: o server manda isDirector
-      const director = (typeof isDirector !== "undefined") ? !!isDirector : false;
+      const RESPONSAVEIS = ["Atendimento","Comercial","Financeiro","Diretoria"];
 
       function bytesToMB(n){
         const num = Number(n || 0);
@@ -142,18 +138,13 @@
       <div style="text-align:right">
         <div class="rightInfo">Logado como: <b><%= usuario.nome %></b></div>
         <div style="margin-top:8px">
-          <% if (st === "resolvido") { %>
-            <span class="pill done">Resolvido</span>
-          <% } else { %>
-            <span class="pill open"><%= ocorrencia.status %></span>
-          <% } %>
+          <span class="pill open"><%= ocorrencia.status %></span>
         </div>
       </div>
     </div>
 
     <div class="grid">
 
-      <!-- Dados principais -->
       <div class="card">
         <div class="section">Dados da ocorrência</div>
 
@@ -191,7 +182,6 @@
 
         <div class="line"></div>
 
-        <!-- ✅ Itens (multi) -->
         <div class="section" style="margin-top:0">Itens errados</div>
 
         <% if (!itens || itens.length === 0) { %>
@@ -227,7 +217,6 @@
           <div class="v" style="font-size:14px;font-weight:600;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere"><%= ocorrencia.descricao %></div>
         </div>
 
-        <!-- ✅ Anexos -->
         <div class="line"></div>
         <div class="section" style="margin-top:0">Anexos</div>
 
@@ -267,49 +256,46 @@
 
       </div>
 
-      <!-- Ações / Status / Responsável -->
       <div class="card">
         <div class="section">Ações</div>
 
         <form method="POST" action="/ocorrencias/<%= ocorrencia.id %>/atualizar">
           <label>Status</label>
-          <select name="status">
-            <option value="Aberto" <%= String(ocorrencia.status)==="Aberto" ? "selected" : "" %>>Aberto</option>
-            <option value="Em análise" <%= String(ocorrencia.status)==="Em análise" ? "selected" : "" %>>Em análise</option>
-            <option value="Aguardando cliente" <%= String(ocorrencia.status)==="Aguardando cliente" ? "selected" : "" %>>Aguardando cliente</option>
-            <option value="Aguardando fábrica" <%= String(ocorrencia.status)==="Aguardando fábrica" ? "selected" : "" %>>Aguardando fábrica</option>
-            <option value="Em transporte" <%= String(ocorrencia.status)==="Em transporte" ? "selected" : "" %>>Em transporte</option>
-
-            <!-- ✅ Só diretor pode selecionar "Resolvido" -->
-            <% if (director) { %>
-              <option value="Resolvido" <%= String(ocorrencia.status)==="Resolvido" ? "selected" : "" %>>Resolvido</option>
-            <% } else { %>
-              <% if (String(ocorrencia.status)==="Resolvido") { %>
-                <option value="Resolvido" selected disabled>Resolvido</option>
-              <% } %>
-            <% } %>
+          <select name="status" <%= canEdit ? "" : "disabled" %>>
+            <% allowed.forEach(s => { %>
+              <option value="<%= s %>" <%= String(ocorrencia.status)===String(s) ? "selected" : "" %>><%= s %></option>
+            <% }) %>
           </select>
 
-          <% if (!director) { %>
-            <div class="hint">Somente Diretor(a) pode alterar o status para <b>Resolvido</b>.</div>
+          <% if (!canEdit) { %>
+            <div class="hint">
+              <% if (String(role)==="comercial") { %>
+                Comercial não altera status.
+              <% } else if (String(role)==="financeiro") { %>
+                Financeiro só altera quando estiver em <b>Finalizado – Financeiro</b>.
+              <% } else if (String(role)==="diretor") { %>
+                Diretor(a) só altera quando o status estiver em <b>Diretoria</b>.
+              <% } else { %>
+                Você não tem permissão para alterar o status agora.
+              <% } %>
+            </div>
           <% } %>
 
           <label>Responsável</label>
-          <select name="responsavel">
-            <option value="Atendimento" <%= String(ocorrencia.responsavel)==="Atendimento" ? "selected" : "" %>>Atendimento</option>
-            <option value="Comercial" <%= String(ocorrencia.responsavel)==="Comercial" ? "selected" : "" %>>Comercial</option>
-            <option value="Qualidade" <%= String(ocorrencia.responsavel)==="Qualidade" ? "selected" : "" %>>Qualidade</option>
-            <option value="Logística" <%= String(ocorrencia.responsavel)==="Logística" ? "selected" : "" %>>Logística</option>
-            <option value="Financeiro" <%= String(ocorrencia.responsavel)==="Financeiro" ? "selected" : "" %>>Financeiro</option>
-            <option value="Diretoria" <%= String(ocorrencia.responsavel)==="Diretoria" ? "selected" : "" %>>Diretoria</option>
+          <select name="responsavel" <%= (String(role)==="comercial" ? "disabled" : "") %>>
+            <% RESPONSAVEIS.forEach(r => { %>
+              <option value="<%= r %>" <%= String(ocorrencia.responsavel)===String(r) ? "selected" : "" %>><%= r %></option>
+            <% }) %>
           </select>
 
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
             <a class="btn" href="/ocorrencias">Voltar</a>
-            <button class="btn primary" type="submit">Salvar alterações</button>
+            <button class="btn primary" type="submit" <%= canEdit ? "" : "disabled" %>>Salvar alterações</button>
           </div>
 
-          <div class="hint">Dica: use “Aguardando cliente/fábrica” para manter controle real do que está pendente.</div>
+          <div class="hint">
+            Status oficiais: <b>Aberto</b> → <b>Em análise</b> → <b>Aguardando cliente</b> → <b>Aguardando fábrica</b> → <b>Finalizado – Financeiro</b> → <b>Diretoria</b>
+          </div>
         </form>
 
         <div class="line"></div>
@@ -326,7 +312,6 @@
 
     </div>
 
-    <!-- Atividades -->
     <div class="card">
       <div class="section">Atividades</div>
 
@@ -346,4 +331,3 @@
 </div>
 </body>
 </html>
-
