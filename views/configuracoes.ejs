@@ -29,7 +29,8 @@
 
   const listUsers = (typeof users !== 'undefined' && Array.isArray(users)) ? users : [];
 
-  // ✅ SOMENTE CARGOS PERMITIDOS (mantém "diretor" como value para bater com o backend)
+  // ✅ SOMENTE CARGOS PERMITIDOS
+  // Mantém "diretor" no value para bater com o backend (server.js)
   const roles = [
     { value: "atendimento", label: "Atendimento" },
     { value: "comercial",   label: "Comercial" },
@@ -37,6 +38,9 @@
     { value: "admin",       label: "Admin" },
     { value: "diretor",     label: "Diretor(a)" }
   ];
+
+  // ✅ roles válidos para comparação rápida
+  const allowedRoleValues = new Set(roles.map(r => r.value));
 
   function fmtDate(v){
     try{
@@ -53,11 +57,18 @@
     return true;
   }
 
-  // ✅ fallback: se vier algum role antigo no banco (ex.: user/logistica/qualidade), mostra "Atendimento" por padrão
+  // ✅ Se vier cargo antigo do banco (ex.: user/logistica/qualidade):
+  // - mostra "Atendimento" por padrão
   function roleLabel(v){
     const vv = String(v||"").toLowerCase();
     const r = roles.find(x => x.value === vv);
     return r ? r.label : "Atendimento";
+  }
+
+  // ✅ garante que o SELECT não fique "sem selected"
+  function normalizedRole(v){
+    const vv = String(v||"").toLowerCase();
+    return allowedRoleValues.has(vv) ? vv : "atendimento";
   }
 %>
 
@@ -242,10 +253,14 @@
                     <td class="text-secondary"><%= fmtDate(u.created_at) %></td>
                     <td class="text-end">
                       <div class="d-inline-flex flex-wrap gap-2 justify-content-end">
+
                         <form method="POST" action="/configuracoes/usuarios/<%= u.id %>/role" class="d-inline-flex gap-2">
                           <select name="role" class="form-select form-select-sm" style="min-width:160px">
+                            <%
+                              const currentRole = normalizedRole(u.role);
+                            %>
                             <% roles.forEach(r => { %>
-                              <option value="<%= r.value %>" <%= String(u.role||'').toLowerCase() === r.value ? 'selected' : '' %>>
+                              <option value="<%= r.value %>" <%= currentRole === r.value ? 'selected' : '' %>>
                                 <%= r.label %>
                               </option>
                             <% }) %>
@@ -357,15 +372,11 @@
       redirect: 'follow'
     });
 
-    // Se der erro, o server costuma redirecionar com ?error=... (a página final é 200)
-    // Então a forma mais segura: recarregar a página após a requisição terminar.
-    // Mas, se o servidor travar/500, o res.ok fica false.
     if (!res.ok) {
       const txt = await res.text().catch(()=> '');
       showAlert('error', txt || 'Erro ao salvar.');
       return false;
     }
-
     return true;
   }
 
@@ -389,7 +400,7 @@
     });
   }
 
-  // ✅ Criar usuário via ajax (AGORA ENVIA CAMPOS CORRETAMENTE)
+  // ✅ Criar usuário via ajax
   const formCriarUser = document.getElementById('formCriarUser');
   if (formCriarUser){
     formCriarUser.addEventListener('submit', async (e) => {
