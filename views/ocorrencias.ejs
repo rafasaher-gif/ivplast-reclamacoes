@@ -19,7 +19,7 @@
 </head>
 <body>
 <%
-  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Usuário" };
+  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Usuário", role: "" };
   const lista = (typeof ocorrencias !== 'undefined' && ocorrencias) ? ocorrencias : [];
   const currentQ = (typeof q !== 'undefined' ? q : '');
   const currentStatus = (typeof status !== 'undefined' ? status : '');
@@ -44,11 +44,8 @@
   }
 
   const role = (user && user.role) ? String(user.role).toLowerCase() : '';
-
-  // UI: botão "Nova ocorrência" some para Financeiro (servidor já bloqueia também)
   const canCreate = role !== 'financeiro';
-
-  const canAdminArea = (role === 'admin' || role === 'diretor');
+  const canSeeAdminMenus = (role === 'admin' || role === 'diretor');
 %>
 
 <div class="app">
@@ -68,7 +65,7 @@
       <a class="active" href="/ocorrencias">🔎 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
 
-      <% if (canAdminArea) { %>
+      <% if (canSeeAdminMenus) { %>
         <a href="/configuracoes">⚙️ Configurações</a>
         <a href="/auditoria">🧾 Auditoria</a>
       <% } %>
