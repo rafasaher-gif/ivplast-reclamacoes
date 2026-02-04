@@ -25,16 +25,13 @@
     .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:14px}
     .section{font-weight:800;font-size:14px;margin:0 0 10px}
     label{display:block;font-size:13px;margin:10px 0 6px;color:#334155}
-    input,select,textarea{
-      width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px
-    }
+    input,select,textarea{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}
     textarea{min-height:110px;resize:vertical}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:700;display:inline-block;text-decoration:none}
+    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:700}
     .btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}
     .btn.danger{background:#ef4444;color:#fff;border-color:#ef4444}
-    .btn:disabled{opacity:.6;cursor:not-allowed}
-    .hint{font-size:12px;color:#64748b;margin-top:4px}
+    .btn[disabled]{opacity:.55;cursor:not-allowed}
+    .hint{font-size:12px;color:#64748b;margin-top:8px}
     .line{height:1px;background:#e5e7eb;margin:12px 0}
     .activity{border:1px solid #e5e7eb;border-radius:10px;padding:10px;margin-top:10px;background:#fff}
     .activity .meta{font-size:12px;color:#64748b;margin-bottom:6px}
@@ -47,21 +44,29 @@
     .v{font-size:14px;font-weight:700;color:#0f172a}
     .kv{display:flex;flex-direction:column;gap:2px}
 
-    /* cards de itens/anexos */
-    .itemCard{
-      border:1px solid #e5e7eb;
-      border-radius:10px;
-      padding:10px;
-      background:#fff;
-    }
+    /* cards de itens */
+    .itemCard{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff}
 
-    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    /* anexos */
+    .attachList{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+    .attachRow{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff
+    }
+    .attachName{font-weight:700;font-size:14px;color:#0f172a;word-break:break-word;overflow-wrap:anywhere}
+    .attachMeta{font-size:12px;color:#64748b;margin-top:2px}
+    .attachLeft{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+    .attachActions{display:flex;gap:8px;flex-shrink:0}
+    .btn.small{padding:8px 10px;font-size:13px;border-radius:8px}
 
     @media(max-width:900px){
       .sidebar{display:none}
       .grid,.grid3{grid-template-columns:1fr}
       .content{padding:14px}
       .top{flex-direction:column}
+      .attachRow{flex-direction:column;align-items:flex-start}
+      .attachActions{width:100%}
+      .attachActions .btn{width:100%}
     }
   </style>
 </head>
@@ -78,12 +83,7 @@
       <a href="/ocorrencias" class="active">🔍 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
 
-      <% 
-        const roleMenu = String((usuario && usuario.role) ? usuario.role : "").toLowerCase();
-        const isDirector = (roleMenu === "diretor" || roleMenu === "diretoria");
-      %>
-
-      <% if (isDirector) { %>
+      <% if (typeof isDirector !== "undefined" && isDirector) { %>
         <a href="/configuracoes">⚙️ Configurações</a>
         <a href="/auditoria">🧾 Auditoria</a>
       <% } %>
@@ -95,13 +95,35 @@
   <main class="content">
 
     <%
-      const role = String((usuario && usuario.role) ? usuario.role : "").toLowerCase();
-      const canSeeCost = ["admin","financeiro","diretoria","diretor"].includes(role);
-      const canResolve = (role === "diretor" || role === "diretoria");
       const st = String(ocorrencia.status || "Aberto").toLowerCase();
 
       // Ajuste de texto: motivo IVPLAST exibe "Fábrica"
       const motivoLabel = (String(ocorrencia.motivo || "") === "IVPLAST") ? "Fábrica" : (ocorrencia.motivo || "-");
+
+      // custo: o server manda canSeeCost=true sempre (todos veem)
+      const showCost = (typeof canSeeCost === "undefined") ? true : !!canSeeCost;
+
+      // diretor: o server manda isDirector
+      const director = (typeof isDirector !== "undefined") ? !!isDirector : false;
+
+      function bytesToMB(n){
+        const num = Number(n || 0);
+        if (!num) return "-";
+        return (num / (1024*1024)).toFixed(2).replace(".", ",") + " MB";
+      }
+      function dtNice(d){
+        try{
+          if(!d) return "";
+          const dd = new Date(d);
+          if(!Number.isFinite(dd.getTime())) return "";
+          const yyyy = dd.getFullYear();
+          const mm = String(dd.getMonth()+1).padStart(2,"0");
+          const day = String(dd.getDate()).padStart(2,"0");
+          const hh = String(dd.getHours()).padStart(2,"0");
+          const mi = String(dd.getMinutes()).padStart(2,"0");
+          return `${day}/${mm}/${yyyy} ${hh}:${mi}`;
+        }catch{ return ""; }
+      }
     %>
 
     <div class="top">
@@ -190,34 +212,7 @@
           </div>
         <% } %>
 
-        <div class="line"></div>
-
-        <!-- ✅ Anexos (download) -->
-        <div class="section" style="margin-top:0">Anexos</div>
-
-        <% if (!anexos || anexos.length === 0) { %>
-          <div class="muted">Nenhum anexo enviado.</div>
-        <% } else { %>
-          <div style="display:flex;flex-direction:column;gap:8px;">
-            <% anexos.forEach((a) => { %>
-              <div class="itemCard" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-                <div style="min-width:0;">
-                  <div class="v" style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                    <%= a.originalname %>
-                  </div>
-                  <div class="k">
-                    <% if (a.size) { %><%= Math.round(a.size/1024) %> KB<% } %>
-                  </div>
-                </div>
-                <div>
-                  <a class="btn" href="/ocorrencias/<%= ocorrencia.id %>/anexos/<%= a.id %>">Baixar</a>
-                </div>
-              </div>
-            <% }) %>
-          </div>
-        <% } %>
-
-        <% if (canSeeCost) { %>
+        <% if (showCost) { %>
           <div class="line"></div>
           <div class="kv">
             <div class="k">Custo estimado</div>
@@ -231,6 +226,45 @@
           <div class="k">Descrição</div>
           <div class="v" style="font-size:14px;font-weight:600;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere"><%= ocorrencia.descricao %></div>
         </div>
+
+        <!-- ✅ Anexos -->
+        <div class="line"></div>
+        <div class="section" style="margin-top:0">Anexos</div>
+
+        <% if (!anexos || anexos.length === 0) { %>
+          <div class="muted">Nenhum anexo nesta ocorrência.</div>
+          <div class="hint">Dica: anexos são adicionados na criação da ocorrência (na tela “Novo”).</div>
+        <% } else { %>
+          <div class="attachList">
+            <% anexos.forEach((a) => { %>
+              <div class="attachRow">
+                <div class="attachLeft">
+                  <div class="attachName"><%= a.originalname %></div>
+                  <div class="attachMeta">
+                    <% if (a.size !== undefined && a.size !== null) { %>
+                      <span><%= bytesToMB(a.size) %></span>
+                    <% } %>
+                    <% if (a.created_at) { %>
+                      <span> • </span><span><%= dtNice(a.created_at) %></span>
+                    <% } %>
+                  </div>
+                </div>
+
+                <div class="attachActions">
+                  <a class="btn small primary"
+                     href="/ocorrencias/<%= ocorrencia.id %>/anexos/<%= a.id %>">
+                    ⬇️ Baixar
+                  </a>
+                </div>
+              </div>
+            <% }) %>
+          </div>
+
+          <div class="hint">
+            Se aparecer “arquivo não disponível”, é porque o Render reiniciou e o servidor não está com disco persistente (vamos resolver depois).
+          </div>
+        <% } %>
+
       </div>
 
       <!-- Ações / Status / Responsável -->
@@ -246,13 +280,18 @@
             <option value="Aguardando fábrica" <%= String(ocorrencia.status)==="Aguardando fábrica" ? "selected" : "" %>>Aguardando fábrica</option>
             <option value="Em transporte" <%= String(ocorrencia.status)==="Em transporte" ? "selected" : "" %>>Em transporte</option>
 
-            <% if (canResolve) { %>
+            <!-- ✅ Só diretor pode selecionar "Resolvido" -->
+            <% if (director) { %>
               <option value="Resolvido" <%= String(ocorrencia.status)==="Resolvido" ? "selected" : "" %>>Resolvido</option>
+            <% } else { %>
+              <% if (String(ocorrencia.status)==="Resolvido") { %>
+                <option value="Resolvido" selected disabled>Resolvido</option>
+              <% } %>
             <% } %>
           </select>
 
-          <% if (!canResolve) { %>
-            <div class="hint">Somente o Diretor pode alterar o status para “Resolvido”.</div>
+          <% if (!director) { %>
+            <div class="hint">Somente Diretor(a) pode alterar o status para <b>Resolvido</b>.</div>
           <% } %>
 
           <label>Responsável</label>
@@ -265,7 +304,7 @@
             <option value="Diretoria" <%= String(ocorrencia.responsavel)==="Diretoria" ? "selected" : "" %>>Diretoria</option>
           </select>
 
-          <div class="actions">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
             <a class="btn" href="/ocorrencias">Voltar</a>
             <button class="btn primary" type="submit">Salvar alterações</button>
           </div>
@@ -279,7 +318,7 @@
         <form method="POST" action="/ocorrencias/<%= ocorrencia.id %>/comentario">
           <label>Comentário</label>
           <textarea name="comentario" placeholder="Escreva uma atualização..."></textarea>
-          <div class="actions">
+          <div style="margin-top:10px">
             <button class="btn primary" type="submit">Adicionar comentário</button>
           </div>
         </form>
@@ -307,3 +346,4 @@
 </div>
 </body>
 </html>
+
