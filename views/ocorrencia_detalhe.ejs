@@ -100,6 +100,7 @@
       const canEdit = (typeof canEditStatus === "undefined") ? false : !!canEditStatus;
       const allowed = (typeof allowedStatuses !== "undefined" && Array.isArray(allowedStatuses)) ? allowedStatuses : [st];
 
+      const canResp = (typeof canChangeResponsavel === "undefined") ? false : !!canChangeResponsavel;
       const RESPONSAVEIS = ["Atendimento","Comercial","Financeiro","Diretoria"];
 
       function bytesToMB(n){
@@ -281,12 +282,14 @@
             </div>
           <% } %>
 
-          <label>Responsável</label>
-          <select name="responsavel" <%= (String(role)==="comercial" ? "disabled" : "") %>>
-            <% RESPONSAVEIS.forEach(r => { %>
-              <option value="<%= r %>" <%= String(ocorrencia.responsavel)===String(r) ? "selected" : "" %>><%= r %></option>
-            <% }) %>
-          </select>
+          <% if (canResp) { %>
+            <label>Responsável</label>
+            <select name="responsavel">
+              <% RESPONSAVEIS.forEach(r => { %>
+                <option value="<%= r %>" <%= String(ocorrencia.responsavel)===String(r) ? "selected" : "" %>><%= r %></option>
+              <% }) %>
+            </select>
+          <% } %>
 
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
             <a class="btn" href="/ocorrencias">Voltar</a>
@@ -331,3 +334,4 @@
 </div>
 </body>
 </html>
+
