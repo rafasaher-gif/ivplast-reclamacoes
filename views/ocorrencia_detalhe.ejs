@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="pt-br">
+
 <head>
   <meta charset="utf-8">
   <title>Ocorrência #<%= ocorrencia.id %> - IVPLAST</title>
@@ -100,8 +101,8 @@
       const canEdit = (typeof canEditStatus === "undefined") ? false : !!canEditStatus;
       const allowed = (typeof allowedStatuses !== "undefined" && Array.isArray(allowedStatuses)) ? allowedStatuses : [st];
 
-      const canResp = (typeof canChangeResponsavel === "undefined") ? false : !!canChangeResponsavel;
       const RESPONSAVEIS = ["Atendimento","Comercial","Financeiro","Diretoria"];
+      const showResponsavelEdit = (typeof isAdmin !== "undefined" && !!isAdmin);
 
       function bytesToMB(n){
         const num = Number(n || 0);
@@ -282,13 +283,15 @@
             </div>
           <% } %>
 
-          <% if (canResp) { %>
-            <label>Responsável</label>
+          <% if (showResponsavelEdit) { %>
+            <label>Responsável (somente Admin)</label>
             <select name="responsavel">
               <% RESPONSAVEIS.forEach(r => { %>
                 <option value="<%= r %>" <%= String(ocorrencia.responsavel)===String(r) ? "selected" : "" %>><%= r %></option>
               <% }) %>
             </select>
+          <% } else { %>
+            <input type="hidden" name="responsavel" value="<%= ocorrencia.responsavel %>">
           <% } %>
 
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
@@ -334,4 +337,5 @@
 </div>
 </body>
 </html>
+
 
