@@ -25,11 +25,15 @@
     .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-bottom:14px}
     .section{font-weight:800;font-size:14px;margin:0 0 10px}
     label{display:block;font-size:13px;margin:10px 0 6px;color:#334155}
-    input,select,textarea{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}
+    input,select,textarea{
+      width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px
+    }
     textarea{min-height:110px;resize:vertical}
-    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:700}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .btn{padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-weight:700;display:inline-block;text-decoration:none}
     .btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}
-    .btn.small{padding:8px 10px;font-size:12px}
+    .btn.danger{background:#ef4444;color:#fff;border-color:#ef4444}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
     .hint{font-size:12px;color:#64748b;margin-top:4px}
     .line{height:1px;background:#e5e7eb;margin:12px 0}
     .activity{border:1px solid #e5e7eb;border-radius:10px;padding:10px;margin-top:10px;background:#fff}
@@ -43,24 +47,21 @@
     .v{font-size:14px;font-weight:700;color:#0f172a}
     .kv{display:flex;flex-direction:column;gap:2px}
 
-    /* cards de itens */
-    .itemCard{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff}
-
-    /* anexos */
-    .anexoRow{
-      display:flex; gap:10px; align-items:center; justify-content:space-between;
-      border:1px solid #e5e7eb; border-radius:10px; padding:10px; background:#fff;
+    /* cards de itens/anexos */
+    .itemCard{
+      border:1px solid #e5e7eb;
+      border-radius:10px;
+      padding:10px;
+      background:#fff;
     }
-    .anexoLeft{display:flex;flex-direction:column;gap:2px;min-width:0}
-    .anexoName{font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px}
-    .anexoMeta{font-size:12px;color:#64748b}
+
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 
     @media(max-width:900px){
       .sidebar{display:none}
       .grid,.grid3{grid-template-columns:1fr}
       .content{padding:14px}
       .top{flex-direction:column}
-      .anexoName{max-width:240px}
     }
   </style>
 </head>
@@ -76,8 +77,17 @@
       <a href="/novo">➕ Novo</a>
       <a href="/ocorrencias" class="active">🔍 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
-      <a href="/configuracoes">⚙️ Configurações</a>
-      <a href="/auditoria">🧾 Auditoria</a>
+
+      <% 
+        const roleMenu = String((usuario && usuario.role) ? usuario.role : "").toLowerCase();
+        const isDirector = (roleMenu === "diretor" || roleMenu === "diretoria");
+      %>
+
+      <% if (isDirector) { %>
+        <a href="/configuracoes">⚙️ Configurações</a>
+        <a href="/auditoria">🧾 Auditoria</a>
+      <% } %>
+
       <a href="/logout">🚪 Sair</a>
     </div>
   </aside>
@@ -86,31 +96,12 @@
 
     <%
       const role = String((usuario && usuario.role) ? usuario.role : "").toLowerCase();
-      const canSeeCost = ["admin","financeiro","diretoria"].includes(role);
+      const canSeeCost = ["admin","financeiro","diretoria","diretor"].includes(role);
+      const canResolve = (role === "diretor" || role === "diretoria");
       const st = String(ocorrencia.status || "Aberto").toLowerCase();
 
       // Ajuste de texto: motivo IVPLAST exibe "Fábrica"
       const motivoLabel = (String(ocorrencia.motivo || "") === "IVPLAST") ? "Fábrica" : (ocorrencia.motivo || "-");
-
-      // helpers simples
-      function fmtBRL(n){
-        try { return "R$ " + (Number(n || 0)).toFixed(2).replace(".", ","); } catch { return "R$ 0,00"; }
-      }
-      function fmtSize(bytes){
-        const b = Number(bytes || 0);
-        if (!b) return "-";
-        const kb = b/1024;
-        if (kb < 1024) return kb.toFixed(1).replace(".", ",") + " KB";
-        const mb = kb/1024;
-        return mb.toFixed(1).replace(".", ",") + " MB";
-      }
-      function fmtDT(d){
-        if (!d) return "";
-        try{
-          const iso = new Date(d).toISOString().slice(0,16).replace("T"," ");
-          return iso;
-        } catch { return ""; }
-      }
     %>
 
     <div class="top">
@@ -178,7 +169,7 @@
 
         <div class="line"></div>
 
-        <!-- Itens -->
+        <!-- ✅ Itens (multi) -->
         <div class="section" style="margin-top:0">Itens errados</div>
 
         <% if (!itens || itens.length === 0) { %>
@@ -199,11 +190,38 @@
           </div>
         <% } %>
 
+        <div class="line"></div>
+
+        <!-- ✅ Anexos (download) -->
+        <div class="section" style="margin-top:0">Anexos</div>
+
+        <% if (!anexos || anexos.length === 0) { %>
+          <div class="muted">Nenhum anexo enviado.</div>
+        <% } else { %>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <% anexos.forEach((a) => { %>
+              <div class="itemCard" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                <div style="min-width:0;">
+                  <div class="v" style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    <%= a.originalname %>
+                  </div>
+                  <div class="k">
+                    <% if (a.size) { %><%= Math.round(a.size/1024) %> KB<% } %>
+                  </div>
+                </div>
+                <div>
+                  <a class="btn" href="/ocorrencias/<%= ocorrencia.id %>/anexos/<%= a.id %>">Baixar</a>
+                </div>
+              </div>
+            <% }) %>
+          </div>
+        <% } %>
+
         <% if (canSeeCost) { %>
           <div class="line"></div>
           <div class="kv">
             <div class="k">Custo estimado</div>
-            <div class="v"><%= fmtBRL(ocorrencia.custo || 0) %></div>
+            <div class="v">R$ <%= (Number(ocorrencia.custo || 0)).toFixed(2).replace(".", ",") %></div>
           </div>
         <% } %>
 
@@ -213,42 +231,6 @@
           <div class="k">Descrição</div>
           <div class="v" style="font-size:14px;font-weight:600;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere"><%= ocorrencia.descricao %></div>
         </div>
-
-        <!-- ✅ ANEXOS -->
-        <div class="line"></div>
-        <div class="section" style="margin-top:0">Anexos</div>
-
-        <% if (!anexos || anexos.length === 0) { %>
-          <div class="muted">Nenhum anexo enviado.</div>
-        <% } else { %>
-          <div style="display:flex;flex-direction:column;gap:10px;">
-            <% anexos.forEach((f) => { %>
-              <div class="anexoRow">
-                <div class="anexoLeft">
-                  <div class="anexoName" title="<%= f.originalname || f.filename %>">
-                    <%= f.originalname || f.filename %>
-                  </div>
-                  <div class="anexoMeta">
-                    <span><%= (f.mimetype || "-") %></span>
-                    <span class="muted"> • </span>
-                    <span><%= fmtSize(f.size) %></span>
-                    <% if (f.created_at) { %>
-                      <span class="muted"> • </span>
-                      <span><%= fmtDT(f.created_at) %></span>
-                    <% } %>
-                  </div>
-                </div>
-
-                <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-                  <a class="btn small" href="/uploads/<%= encodeURIComponent(f.filename) %>" target="_blank" rel="noopener">Abrir</a>
-                  <a class="btn small primary" href="/uploads/<%= encodeURIComponent(f.filename) %>" download>Baixar</a>
-                </div>
-              </div>
-            <% }) %>
-          </div>
-          <div class="hint">Os anexos são servidos em <b>/uploads</b>. Se abrir em nova aba, dá para visualizar (PDF/imagem) e também baixar.</div>
-        <% } %>
-
       </div>
 
       <!-- Ações / Status / Responsável -->
@@ -263,8 +245,15 @@
             <option value="Aguardando cliente" <%= String(ocorrencia.status)==="Aguardando cliente" ? "selected" : "" %>>Aguardando cliente</option>
             <option value="Aguardando fábrica" <%= String(ocorrencia.status)==="Aguardando fábrica" ? "selected" : "" %>>Aguardando fábrica</option>
             <option value="Em transporte" <%= String(ocorrencia.status)==="Em transporte" ? "selected" : "" %>>Em transporte</option>
-            <option value="Resolvido" <%= String(ocorrencia.status)==="Resolvido" ? "selected" : "" %>>Resolvido</option>
+
+            <% if (canResolve) { %>
+              <option value="Resolvido" <%= String(ocorrencia.status)==="Resolvido" ? "selected" : "" %>>Resolvido</option>
+            <% } %>
           </select>
+
+          <% if (!canResolve) { %>
+            <div class="hint">Somente o Diretor pode alterar o status para “Resolvido”.</div>
+          <% } %>
 
           <label>Responsável</label>
           <select name="responsavel">
@@ -276,7 +265,7 @@
             <option value="Diretoria" <%= String(ocorrencia.responsavel)==="Diretoria" ? "selected" : "" %>>Diretoria</option>
           </select>
 
-          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+          <div class="actions">
             <a class="btn" href="/ocorrencias">Voltar</a>
             <button class="btn primary" type="submit">Salvar alterações</button>
           </div>
@@ -290,7 +279,7 @@
         <form method="POST" action="/ocorrencias/<%= ocorrencia.id %>/comentario">
           <label>Comentário</label>
           <textarea name="comentario" placeholder="Escreva uma atualização..."></textarea>
-          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+          <div class="actions">
             <button class="btn primary" type="submit">Adicionar comentário</button>
           </div>
         </form>
@@ -318,4 +307,3 @@
 </div>
 </body>
 </html>
-
