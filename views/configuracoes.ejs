@@ -174,30 +174,39 @@
 
             <div class="collapse mt-3" id="novoUserBox">
               <div class="border rounded-3 p-3 bg-light">
-                <form id="formCriarUser" class="row g-2" method="POST" action="/configuracoes/usuarios/criar">
-                  <div class="col-md-3">
-                    <label class="form-label small">Nome</label>
-                    <input name="nome" class="form-control" placeholder="Nome" required>
-                  </div>
-                  <div class="col-md-3">
-                    <label class="form-label small">Email</label>
-                    <input name="email" type="email" class="form-control" placeholder="email@empresa.com" required>
-                  </div>
-                  <div class="col-md-3">
-                    <label class="form-label small">Senha (min. 6)</label>
-                    <input name="senha" type="password" class="form-control" placeholder="••••••••" minlength="6" required>
-                  </div>
-                  <div class="col-md-3">
-                    <label class="form-label small">Cargo</label>
-                    <select name="role" class="form-select">
-                      <% roles.forEach(r => { %>
-                        <option value="<%= r.value %>"><%= r.label %></option>
-                      <% }) %>
-                    </select>
-                  </div>
-                  <div class="col-12 d-flex gap-2">
-                    <button class="btn btn-primary btn-sm" type="submit">Criar usuário</button>
-                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#novoUserBox">Cancelar</button>
+                <!-- ✅ IMPORTANTE: aqui é form normal (NÃO ajax) para garantir que envia os campos -->
+                <form id="formCriarUser" method="POST" action="/configuracoes/usuarios/criar">
+                  <div class="row g-2">
+
+                    <div class="col-md-3">
+                      <label class="form-label small">Nome</label>
+                      <input name="nome" class="form-control" placeholder="Nome" required>
+                    </div>
+
+                    <div class="col-md-3">
+                      <label class="form-label small">Email</label>
+                      <input name="email" type="email" class="form-control" placeholder="email@empresa.com" required>
+                    </div>
+
+                    <div class="col-md-3">
+                      <label class="form-label small">Senha (min. 6)</label>
+                      <input name="senha" type="password" class="form-control" placeholder="••••••••" minlength="6" required>
+                    </div>
+
+                    <div class="col-md-3">
+                      <label class="form-label small">Cargo</label>
+                      <select name="role" class="form-select">
+                        <% roles.forEach(r => { %>
+                          <option value="<%= r.value %>"><%= r.label %></option>
+                        <% }) %>
+                      </select>
+                    </div>
+
+                    <div class="col-12 d-flex gap-2">
+                      <button class="btn btn-primary btn-sm" type="submit">Criar usuário</button>
+                      <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#novoUserBox">Cancelar</button>
+                    </div>
+
                   </div>
                 </form>
               </div>
@@ -340,51 +349,6 @@
     setTimeout(()=>{ try{ div.remove(); }catch(e){} }, 10000);
   }
 
-  async function submitFormAjax(form){
-    const url = form.getAttribute('action');
-    const method = (form.getAttribute('method') || 'POST').toUpperCase();
-    const fd = new FormData(form);
-
-    const res = await fetch(url, { method, body: fd, credentials: 'same-origin' });
-    const text = await res.text();
-
-    if (!res.ok) {
-      // servidor normalmente retorna texto tipo: "Email já cadastrado." / "Erro ao criar usuário."
-      showAlert('error', text || 'Erro ao salvar.');
-      return false;
-    }
-
-    // sucesso: recarrega para atualizar lista/estado
-    showAlert('success', 'Salvo com sucesso.');
-    setTimeout(()=> window.location.reload(), 400);
-    return true;
-  }
-
-  // ===== Intercepta submits que antes te jogavam numa tela de erro =====
-  const formCriarUser = document.getElementById('formCriarUser');
-  if (formCriarUser){
-    formCriarUser.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await submitFormAjax(formCriarUser);
-    });
-  }
-
-  const formAdmin = document.getElementById('formAdmin');
-  if (formAdmin){
-    formAdmin.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await submitFormAjax(formAdmin);
-    });
-  }
-
-  const formMinhaSenha = document.getElementById('formMinhaSenha');
-  if (formMinhaSenha){
-    formMinhaSenha.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await submitFormAjax(formMinhaSenha);
-    });
-  }
-
   // ===== Modal Reset Senha =====
   const resetModal = document.getElementById('resetSenhaModal');
   resetModal.addEventListener('show.bs.modal', function (event) {
@@ -402,21 +366,7 @@
     const input = form.querySelector('input[name="novaSenha"]');
     if (input) input.value = '';
   });
-
-  const resetSenhaForm = document.getElementById('resetSenhaForm');
-  if (resetSenhaForm){
-    resetSenhaForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const ok = await submitFormAjax(resetSenhaForm);
-      if (ok){
-        // fecha modal
-        const modal = bootstrap.Modal.getInstance(resetModal);
-        if (modal) modal.hide();
-      }
-    });
-  }
 </script>
 </body>
 </html>
-
 
