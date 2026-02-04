@@ -19,12 +19,33 @@
 </head>
 <body>
 <%
-  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Raphael" };
-  const lista = (typeof ocorrencias !== 'undefined' && ocorrencias && ocorrencias.length) ? ocorrencias : [
-    { id: 12484, cliente: "LIMA E SILVA COMERCIAL LTDA", criadoEm: "há 27 dias", ultimaAtividade: "há 73 dias", status: "Aberto", situacao: "Em andamento" },
-    { id: 12483, cliente: "Qtda: ocorrências (exemplo)", criadoEm: "há 27 dias", ultimaAtividade: "há 24 horas", status: "Aberto", situacao: "Em aberto" },
-    { id: 12444, cliente: "Solic. btoer saqns (SS)", criadoEm: "há 27 dias", ultimaAtividade: "há 24 horas", status: "Aberto", situacao: "Em aberto" },
+  const user = (typeof usuario !== 'undefined' && usuario) ? usuario : { nome: "Usuário" };
+  const lista = (typeof ocorrencias !== 'undefined' && ocorrencias) ? ocorrencias : [];
+  const currentQ = (typeof q !== 'undefined' ? q : '');
+  const currentStatus = (typeof status !== 'undefined' ? status : '');
+
+  const STATUS = [
+    "Aberto",
+    "Em análise",
+    "Aguardando cliente",
+    "Aguardando fábrica",
+    "Finalizado – Financeiro",
+    "Diretoria"
   ];
+
+  function badgeClass(st){
+    if (st === "Aberto") return "text-bg-danger";
+    if (st === "Em análise") return "text-bg-warning";
+    if (st === "Aguardando cliente") return "text-bg-info";
+    if (st === "Aguardando fábrica") return "text-bg-info";
+    if (st === "Finalizado – Financeiro") return "text-bg-primary";
+    if (st === "Diretoria") return "text-bg-success";
+    return "text-bg-secondary";
+  }
+
+  // UI: botão "Nova ocorrência" some para Financeiro (servidor já bloqueia)
+  const role = (user && user.role) ? String(user.role).toLowerCase() : '';
+  const canCreate = role !== 'financeiro';
 %>
 
 <div class="app">
@@ -38,7 +59,9 @@
     </div>
     <div class="nav flex-column">
       <a href="/dashboard">🏠 Menu Principal</a>
-      <a href="/novo">➕ Novo</a>
+      <% if (canCreate) { %>
+        <a href="/novo">➕ Novo</a>
+      <% } %>
       <a class="active" href="/ocorrencias">🔎 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
       <a href="/configuracoes">⚙️ Configurações</a>
@@ -49,31 +72,42 @@
   </aside>
 
   <main class="content">
-    <div class="topbar d-flex justify-content-between align-items-center">
+    <div class="topbar d-flex justify-content-between align-items-center flex-wrap gap-2">
       <div>
         <div class="small text-secondary">Menu Principal / Ocorrências</div>
         <div class="fw-semibold">Bem-vindo ao sistema, <%= user.nome %>!</div>
       </div>
 
-      <div class="d-flex gap-2">
+      <div class="d-flex gap-2 flex-wrap">
         <form class="d-flex" method="GET" action="/ocorrencias">
-          <input class="form-control" name="q" placeholder="Pesquisar solicitações" value="<%= (typeof q !== 'undefined' ? q : '') %>">
+          <input class="form-control" name="q" placeholder="Pesquisar solicitações" value="<%= currentQ %>">
+          <% if (currentStatus) { %>
+            <input type="hidden" name="status" value="<%= currentStatus %>">
+          <% } %>
           <button class="btn btn-outline-secondary ms-2" type="submit">Buscar</button>
         </form>
-        <a class="btn btn-primary" href="/novo">+ Nova ocorrência</a>
+
+        <% if (canCreate) { %>
+          <a class="btn btn-primary" href="/novo">+ Nova ocorrência</a>
+        <% } %>
       </div>
     </div>
 
     <div class="card panel">
       <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <div class="fw-semibold">Ocorrências em Aberto</div>
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div class="fw-semibold">Ocorrências</div>
           <div class="d-flex gap-2">
-            <select class="form-select form-select-sm" style="width:140px" onchange="location.href='/ocorrencias?status='+this.value">
-              <option value="">Todos</option>
-              <option value="Aberto">Abertos</option>
-              <option value="Em andamento">Em andamento</option>
-              <option value="Resolvido">Resolvidos</option>
+            <select class="form-select form-select-sm" style="min-width:220px"
+              onchange="
+                const url = new URL(window.location.href);
+                if(this.value){ url.searchParams.set('status', this.value); } else { url.searchParams.delete('status'); }
+                window.location.href = url.toString();
+              ">
+              <option value="">Todos os status</option>
+              <% STATUS.forEach(s => { %>
+                <option value="<%= s %>" <%= String(currentStatus)===String(s) ? 'selected' : '' %>><%= s %></option>
+              <% }) %>
             </select>
           </div>
         </div>
@@ -86,11 +120,16 @@
                 <th>ID</th>
                 <th>Criado</th>
                 <th>Última atividade</th>
-                <th>Situação</th>
                 <th class="text-end">Status</th>
               </tr>
             </thead>
             <tbody>
+              <% if (!lista.length) { %>
+                <tr>
+                  <td colspan="5" class="text-center text-secondary py-4">Nenhuma ocorrência encontrada.</td>
+                </tr>
+              <% } %>
+
               <% lista.forEach(o => { %>
                 <tr>
                   <td>
@@ -99,15 +138,8 @@
                   <td>#<%= o.id %></td>
                   <td><%= o.criadoEm %></td>
                   <td><%= o.ultimaAtividade %></td>
-                  <td><span class="text-secondary"><%= o.situacao %></span></td>
                   <td class="text-end">
-                    <% if (o.status === "Aberto") { %>
-                      <span class="badge text-bg-danger">Aberto</span>
-                    <% } else if (o.status === "Resolvido") { %>
-                      <span class="badge text-bg-success">Resolvido</span>
-                    <% } else { %>
-                      <span class="badge text-bg-warning">Em andamento</span>
-                    <% } %>
+                    <span class="badge <%= badgeClass(o.status) %>"><%= o.status %></span>
                   </td>
                 </tr>
               <% }) %>
