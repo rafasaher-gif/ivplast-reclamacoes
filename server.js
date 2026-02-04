@@ -42,13 +42,18 @@ app.set("trust proxy", 1);
 ----------------------------- */
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+
+// ✅ parsing de body (FORM e JSON)
+app.use(express.urlencoded({ extended: true })); // forms (application/x-www-form-urlencoded)
+app.use(express.json()); // json
 
 /* -----------------------------
    Uploads
 ----------------------------- */
-const UPLOAD_DIR = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(__dirname, "uploads");
+const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.join(__dirname, "uploads");
+
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const upload = multer({
@@ -109,6 +114,7 @@ function requireAuth(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
   next();
 }
+
 function userRole(req) {
   return String(req.session?.user?.role || "").toLowerCase();
 }
@@ -122,6 +128,8 @@ function isAdmin(req) {
 function canViewAllOcorrencias(req) {
   return isAdmin(req) || isDirector(req);
 }
+
+// ✅ Config/Auditoria/Usuários: Admin OU Diretor
 function requireAdminOrDirector(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
   if (!(isAdmin(req) || isDirector(req))) {
@@ -165,6 +173,21 @@ function normalizeStatus(s) {
   return String(s || "").trim().toLowerCase();
 }
 
+function cleanEmail(v) {
+  return String(v || "").trim().toLowerCase();
+}
+function cleanStr(v) {
+  return String(v || "").trim();
+}
+function pickFirst(...values) {
+  for (const v of values) {
+    if (v === undefined || v === null) continue;
+    const s = String(v);
+    if (s.trim().length) return s;
+  }
+  return "";
+}
+
 /* -----------------------------
    MOCK (sem DB)
 ----------------------------- */
@@ -176,6 +199,7 @@ const mock = {
 };
 
 function ensureMockUserFromEnv(kind) {
+  // kind: "admin" | "director"
   const emailEnv = kind === "director" ? "DIRECTOR_EMAIL" : "ADMIN_EMAIL";
   const passEnv = kind === "director" ? "DIRECTOR_PASSWORD" : "ADMIN_PASSWORD";
   const nameEnv = kind === "director" ? "DIRECTOR_NAME" : "ADMIN_NAME";
@@ -247,7 +271,6 @@ async function listUsers() {
     );
     return r.rows;
   }
-
   return mock.users
     .slice()
     .sort((a, b) => String(a.nome || "").localeCompare(String(b.nome || "")))
@@ -267,6 +290,7 @@ async function listUsers() {
 async function dbInit() {
   if (!USE_DB) return;
 
+  // USERS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -304,6 +328,7 @@ async function dbInit() {
     END $$;
   `);
 
+  // SETTINGS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -311,6 +336,7 @@ async function dbInit() {
     );
   `);
 
+  // OCORRENCIAS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencias (
       id SERIAL PRIMARY KEY,
@@ -337,14 +363,17 @@ async function dbInit() {
     );
   `);
 
+  // Migração/garantias
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS empresa TEXT NOT NULL DEFAULT 'IVPLAST';`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS nfd_numero TEXT;`);
 
+  // ✅ LEGADO: coluna "tipo" pode existir como NOT NULL no seu DB
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS tipo TEXT;`);
   await pool.query(`UPDATE ocorrencias SET tipo = COALESCE(tipo, 'Comercial') WHERE tipo IS NULL;`);
   await pool.query(`ALTER TABLE ocorrencias ALTER COLUMN tipo SET DEFAULT 'Comercial';`);
 
+  // Atividades
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_atividades (
       id SERIAL PRIMARY KEY,
@@ -355,6 +384,7 @@ async function dbInit() {
     );
   `);
 
+  // Anexos
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_anexos (
       id SERIAL PRIMARY KEY,
@@ -367,6 +397,7 @@ async function dbInit() {
     );
   `);
 
+  // Itens
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_itens (
       id SERIAL PRIMARY KEY,
@@ -377,6 +408,7 @@ async function dbInit() {
     );
   `);
 
+  // AUDITORIA
   await pool.query(`
     CREATE TABLE IF NOT EXISTS auditoria (
       id SERIAL PRIMARY KEY,
@@ -387,6 +419,7 @@ async function dbInit() {
     );
   `);
 
+  // Seed/Repair ADMIN
   const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
@@ -396,11 +429,10 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'admin',true)`, [
-        adminName,
-        adminEmail,
-        hash,
-      ]);
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'admin',true)`,
+        [adminName, adminEmail, hash]
+      );
       console.log("✅ Admin criado via ENV.");
     } else {
       const id = existing.rows[0].id;
@@ -411,6 +443,7 @@ async function dbInit() {
     }
   }
 
+  // Seed/Repair DIRECTOR
   const dirEmail = String(process.env.DIRECTOR_EMAIL || "").trim().toLowerCase();
   const dirPass = String(process.env.DIRECTOR_PASSWORD || "");
   const dirName = process.env.DIRECTOR_NAME || "Diretor";
@@ -420,11 +453,10 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'diretor',true)`, [
-        dirName,
-        dirEmail,
-        hash,
-      ]);
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'diretor',true)`,
+        [dirName, dirEmail, hash]
+      );
       console.log("✅ Diretor criado via ENV.");
     } else {
       const id = existing.rows[0].id;
@@ -445,6 +477,21 @@ async function dbInit() {
 ----------------------------- */
 app.use((req, res, next) => {
   res.locals.usuario = req.session.user || null;
+  next();
+});
+
+/* -----------------------------
+   DEBUG (somente rotas de usuários)
+   -> para você ver o que está chegando no POST
+----------------------------- */
+app.use((req, res, next) => {
+  if (req.method === "POST" && req.path.startsWith("/configuracoes/usuarios")) {
+    console.log("USR_POST_DEBUG:", {
+      path: req.path,
+      ct: req.headers["content-type"],
+      bodyKeys: req.body ? Object.keys(req.body) : [],
+    });
+  }
   next();
 });
 
@@ -481,6 +528,7 @@ app.post("/login", async (req, res) => {
 
     if (!user || !user.senha_hash) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
 
+    // ✅ bloqueia usuário inativo
     const isActive = user.active === undefined ? true : !!user.active;
     if (!isActive) return res.status(403).render("login", { error: "Usuário inativo. Fale com o administrador." });
 
@@ -525,11 +573,10 @@ app.post("/register", async (req, res) => {
       if (exists.rowCount > 0) {
         return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       }
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'user',true)`, [
-        nome,
-        email,
-        hash,
-      ]);
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'user',true)`,
+        [nome, email, hash]
+      );
     } else {
       const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
       if (exists) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
@@ -679,7 +726,12 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 
 /* -------- /novo (GET) -------- */
 app.get("/novo", requireAuth, (req, res) => {
-  res.render("novo", { usuario: req.session.user, canSeeCost: true, error: null, success: null });
+  res.render("novo", {
+    usuario: req.session.user,
+    canSeeCost: true,
+    error: null,
+    success: null,
+  });
 });
 
 /* -------- /novo (POST) -------- */
@@ -856,6 +908,7 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
   if (!ocorrenciaId || !anexoId) return res.status(400).send("Parâmetros inválidos.");
 
   try {
+    // permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         ocorrenciaId,
@@ -903,6 +956,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
   if (!id) return res.redirect("/ocorrencias");
 
   try {
+    // permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         id,
@@ -1145,6 +1199,7 @@ app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
   }
 });
 
+/* ✅ POST /configuracoes/admin */
 app.post("/configuracoes/admin", requireAdminOrDirector, async (req, res) => {
   try {
     const adminEmail = String(req.body.adminEmail || "").trim();
@@ -1161,6 +1216,7 @@ app.post("/configuracoes/admin", requireAdminOrDirector, async (req, res) => {
   }
 });
 
+/* ✅ POST /configuracoes/senha */
 app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
   try {
     const novaSenha = String(req.body.novaSenha || "");
@@ -1190,16 +1246,26 @@ app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
   }
 });
 
-/* ✅ Gestão de Usuários (Admin/Diretor) */
+/* ✅ Gestão de Usuários (Admin/Diretor)
+   - Criar usuário
+   - Trocar cargo
+   - Ativar/Desativar
+   - Resetar senha
+*/
 
-// criar usuário (COM RETURNING + LOGS)
+// criar usuário
 app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, res) => {
   try {
-    const nome = String(req.body.nome || "").trim();
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const role = String(req.body.role || "user").trim();
-    const senha = String(req.body.senha || "");
+    // ✅ aceita variações de nome de campo (seu EJS usa nome/email/senha/role)
+    const nome = cleanStr(pickFirst(req.body.nome, req.body.name));
+    const email = cleanEmail(pickFirst(req.body.email, req.body.userEmail, req.body.mail));
+    const senha = String(pickFirst(req.body.senha, req.body.password, req.body.pass) || "");
+    const role = cleanStr(pickFirst(req.body.role, req.body.cargo, req.body.perfil, "user")).toLowerCase();
 
+    console.log("USR_CREATE_BODY:", {
+      ct: req.headers["content-type"],
+      body: req.body,
+    });
     console.log("USR_CREATE_IN:", { nome, email, role, useDb: USE_DB });
 
     if (!nome || !email || !senha) {
@@ -1213,42 +1279,32 @@ app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, re
 
     const hash = await bcrypt.hash(senha, 10);
 
-    let newId = null;
-
     if (USE_DB) {
       const exists = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1`, [email]);
       if (exists.rowCount) {
-        console.log("USR_CREATE_FAIL: email exists");
+        console.log("USR_CREATE_FAIL: email exists", email);
         return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
       }
 
-      const ins = await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role,active)
-         VALUES ($1,$2,$3,$4,true)
-         RETURNING id`,
-        [nome, email, hash, role]
-      );
-
-      newId = ins.rowCount ? ins.rows[0].id : null;
-
-      if (!newId) {
-        console.log("USR_CREATE_FAIL: no RETURNING id");
-        return res.redirect(`/configuracoes?error=${encodeURIComponent("Falha ao criar usuário (sem id).")}`);
-      }
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`, [
+        nome,
+        email,
+        hash,
+        role,
+      ]);
     } else {
       const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
       if (exists) {
-        console.log("USR_CREATE_FAIL: email exists (mock)");
+        console.log("USR_CREATE_FAIL: email exists (mock)", email);
         return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
       }
 
-      newId = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
-      mock.users.push({ id: newId, nome, email, senha_hash: hash, role, active: true, created_at: nowISO() });
+      const id = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
+      mock.users.push({ id, nome, email, senha_hash: hash, role, active: true, created_at: nowISO() });
     }
 
-    console.log("USR_CREATE_OK:", { id: newId, email, role });
-
-    await auditLog(req.session.user.nome, "Criou usuário", `id=${newId}, email=${email}, role=${role}`);
+    await auditLog(req.session.user.nome, "Criou usuário", `email=${email}, role=${role}`);
+    console.log("USR_CREATE_OK:", email);
     return res.redirect(`/configuracoes?success=${encodeURIComponent("Usuário criado.")}`);
   } catch (err) {
     console.error("USR_CREATE_ERR:", err);
@@ -1260,7 +1316,7 @@ app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, re
 app.post("/configuracoes/usuarios/:id/role", requireAdminOrDirector, async (req, res) => {
   try {
     const id = safeInt(req.params.id, 0);
-    const role = String(req.body.role || "user").trim();
+    const role = cleanStr(pickFirst(req.body.role, req.body.cargo, "user")).toLowerCase();
     if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
 
     if (USE_DB) {
@@ -1285,6 +1341,7 @@ app.post("/configuracoes/usuarios/:id/active", requireAdminOrDirector, async (re
     const active = String(req.body.active || "true") === "true";
     if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
 
+    // evita se desativar sozinho
     if (id === req.session.user.id && !active) {
       return res.redirect(`/configuracoes?error=${encodeURIComponent("Você não pode desativar o próprio usuário.")}`);
     }
@@ -1354,17 +1411,6 @@ app.get("/auditoria", requireAdminOrDirector, async (req, res) => {
   }
 });
 
-/* ✅ DEBUG: confirmar usuários no banco sem depender do EJS */
-app.get("/debug/users", requireAdminOrDirector, async (req, res) => {
-  try {
-    const users = await listUsers();
-    res.json({ useDb: USE_DB, count: users.length, users });
-  } catch (err) {
-    console.error("DEBUG_USERS_ERR:", err);
-    res.status(500).json({ error: "erro" });
-  }
-});
-
 /* Static */
 app.use("/uploads", express.static(UPLOAD_DIR));
 
@@ -1379,6 +1425,7 @@ const PORT = process.env.PORT || 3000;
       databaseSsl: String(process.env.DATABASE_SSL || ""),
       useDb: USE_DB,
       nodeEnv: process.env.NODE_ENV || "dev",
+      port: PORT,
     };
     console.log("DIAG:", diag);
 
