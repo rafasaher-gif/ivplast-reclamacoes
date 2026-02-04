@@ -2,7 +2,7 @@
  * server.js — IVPLAST Reclamações (Express + EJS + Session + Postgres)
  *
  * Dependências:
- *   npm i express ejs express-session bcryptjs pg multer
+ *   npm i express ejs express-session bcryptjs pg multer bcryptjs
  *
  * ENV (Render):
  *   SESSION_SECRET=...
@@ -103,6 +103,14 @@ if (USE_DB) {
     ssl: sslEnabled ? { rejectUnauthorized: false } : false,
   });
 }
+
+/**
+ * ✅ Flags de compatibilidade (LEGADO)
+ * Alguns bancos antigos têm colunas "name" e/ou "password_hash".
+ * Em alguns casos, "name" está NOT NULL e quebra o insert.
+ */
+let HAS_LEGACY_NAME_COL = false;
+let HAS_LEGACY_PASSWORD_HASH_COL = false;
 
 /* -----------------------------
    Helpers
@@ -290,7 +298,7 @@ async function listUsers() {
 async function dbInit() {
   if (!USE_DB) return;
 
-  // USERS
+  // USERS (schema novo)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -303,30 +311,50 @@ async function dbInit() {
     );
   `);
 
+  // garante colunas do schema novo
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS senha_hash TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
 
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='users' AND column_name='name'
-      ) THEN
-        EXECUTE 'UPDATE users SET nome = COALESCE(nome, name) WHERE nome IS NULL';
-      END IF;
-
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='users' AND column_name='password_hash'
-      ) THEN
-        EXECUTE 'UPDATE users SET senha_hash = COALESCE(senha_hash, password_hash) WHERE senha_hash IS NULL';
-      END IF;
-    END $$;
+  // ============================
+  // ✅ LEGADO: detectar colunas antigas (name/password_hash)
+  // e neutralizar NOT NULL em "name" (causador do seu erro)
+  // ============================
+  const legacyNameCol = await pool.query(`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='users' AND column_name='name'
+    LIMIT 1
   `);
+  HAS_LEGACY_NAME_COL = legacyNameCol.rowCount > 0;
+
+  if (HAS_LEGACY_NAME_COL) {
+    // remove NOT NULL para não quebrar inserts
+    try {
+      await pool.query(`ALTER TABLE users ALTER COLUMN name DROP NOT NULL;`);
+    } catch (_) {}
+
+    // preenche name com nome quando faltar
+    await pool.query(`UPDATE users SET name = COALESCE(name, nome) WHERE name IS NULL;`);
+
+    // também puxa "nome" do legado se necessário
+    await pool.query(`UPDATE users SET nome = COALESCE(nome, name) WHERE nome IS NULL;`);
+  }
+
+  const legacyPassCol = await pool.query(`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='users' AND column_name='password_hash'
+    LIMIT 1
+  `);
+  HAS_LEGACY_PASSWORD_HASH_COL = legacyPassCol.rowCount > 0;
+
+  if (HAS_LEGACY_PASSWORD_HASH_COL) {
+    await pool.query(`UPDATE users SET senha_hash = COALESCE(senha_hash, password_hash) WHERE senha_hash IS NULL;`);
+    await pool.query(`UPDATE users SET password_hash = COALESCE(password_hash, senha_hash) WHERE password_hash IS NULL;`);
+  }
 
   // SETTINGS
   await pool.query(`
@@ -419,7 +447,9 @@ async function dbInit() {
     );
   `);
 
+  // ============================
   // Seed/Repair ADMIN
+  // ============================
   const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
@@ -429,21 +459,34 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'admin',true)`,
-        [adminName, adminEmail, hash]
-      );
+      if (HAS_LEGACY_NAME_COL) {
+        await pool.query(
+          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,'admin',true)`,
+          [adminName, adminEmail, hash]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'admin',true)`,
+          [adminName, adminEmail, hash]
+        );
+      }
       console.log("✅ Admin criado via ENV.");
     } else {
       const id = existing.rows[0].id;
       await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [adminName, id]);
+      if (HAS_LEGACY_NAME_COL) await pool.query(`UPDATE users SET name = COALESCE(name,$1) WHERE id=$2`, [adminName, id]);
+
       await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
+      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash = $1 WHERE id=$2`, [hash, id]);
+
       await pool.query(`UPDATE users SET role = 'admin', active=true WHERE id=$1`, [id]);
       console.log("✅ Admin atualizado via ENV (senha reset).");
     }
   }
 
+  // ============================
   // Seed/Repair DIRECTOR
+  // ============================
   const dirEmail = String(process.env.DIRECTOR_EMAIL || "").trim().toLowerCase();
   const dirPass = String(process.env.DIRECTOR_PASSWORD || "");
   const dirName = process.env.DIRECTOR_NAME || "Diretor";
@@ -453,15 +496,26 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'diretor',true)`,
-        [dirName, dirEmail, hash]
-      );
+      if (HAS_LEGACY_NAME_COL) {
+        await pool.query(
+          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,'diretor',true)`,
+          [dirName, dirEmail, hash]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'diretor',true)`,
+          [dirName, dirEmail, hash]
+        );
+      }
       console.log("✅ Diretor criado via ENV.");
     } else {
       const id = existing.rows[0].id;
       await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [dirName, id]);
+      if (HAS_LEGACY_NAME_COL) await pool.query(`UPDATE users SET name = COALESCE(name,$1) WHERE id=$2`, [dirName, id]);
+
       await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
+      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash = $1 WHERE id=$2`, [hash, id]);
+
       await pool.query(`UPDATE users SET role = 'diretor', active=true WHERE id=$1`, [id]);
       console.log("✅ Diretor atualizado via ENV (senha reset).");
     }
@@ -470,6 +524,11 @@ async function dbInit() {
   await upsertSetting("adminEmail", process.env.ADMIN_EMAIL || "");
   await upsertSetting("adminName", process.env.ADMIN_NAME || "");
   await upsertSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)));
+
+  console.log("✅ DB Init OK", {
+    HAS_LEGACY_NAME_COL,
+    HAS_LEGACY_PASSWORD_HASH_COL,
+  });
 }
 
 /* -----------------------------
@@ -482,7 +541,6 @@ app.use((req, res, next) => {
 
 /* -----------------------------
    DEBUG (somente rotas de usuários)
-   -> para você ver o que está chegando no POST
 ----------------------------- */
 app.use((req, res, next) => {
   if (req.method === "POST" && req.path.startsWith("/configuracoes/usuarios")) {
@@ -528,7 +586,6 @@ app.post("/login", async (req, res) => {
 
     if (!user || !user.senha_hash) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
 
-    // ✅ bloqueia usuário inativo
     const isActive = user.active === undefined ? true : !!user.active;
     if (!isActive) return res.status(403).render("login", { error: "Usuário inativo. Fale com o administrador." });
 
@@ -573,10 +630,18 @@ app.post("/register", async (req, res) => {
       if (exists.rowCount > 0) {
         return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       }
-      await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'user',true)`,
-        [nome, email, hash]
-      );
+
+      if (HAS_LEGACY_NAME_COL) {
+        await pool.query(
+          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,'user',true)`,
+          [nome, email, hash]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'user',true)`,
+          [nome, email, hash]
+        );
+      }
     } else {
       const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
       if (exists) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
@@ -908,7 +973,6 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
   if (!ocorrenciaId || !anexoId) return res.status(400).send("Parâmetros inválidos.");
 
   try {
-    // permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         ocorrenciaId,
@@ -956,7 +1020,6 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
   if (!id) return res.redirect("/ocorrencias");
 
   try {
-    // permissão: se não é admin/diretor, precisa ser dono da ocorrência
     if (USE_DB && !canViewAllOcorrencias(req)) {
       const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
         id,
@@ -1233,6 +1296,7 @@ app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
 
     if (USE_DB) {
       await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
+      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
     } else {
       const u = mock.users.find((x) => x.id === req.session.user.id);
       if (u) u.senha_hash = hash;
@@ -1246,34 +1310,23 @@ app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
   }
 });
 
-/* ✅ Gestão de Usuários (Admin/Diretor)
-   - Criar usuário
-   - Trocar cargo
-   - Ativar/Desativar
-   - Resetar senha
-*/
+/* ✅ Gestão de Usuários (Admin/Diretor) */
 
 // criar usuário
 app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, res) => {
   try {
-    // ✅ aceita variações de nome de campo (seu EJS usa nome/email/senha/role)
     const nome = cleanStr(pickFirst(req.body.nome, req.body.name));
     const email = cleanEmail(pickFirst(req.body.email, req.body.userEmail, req.body.mail));
     const senha = String(pickFirst(req.body.senha, req.body.password, req.body.pass) || "");
     const role = cleanStr(pickFirst(req.body.role, req.body.cargo, req.body.perfil, "user")).toLowerCase();
 
-    console.log("USR_CREATE_BODY:", {
-      ct: req.headers["content-type"],
-      body: req.body,
-    });
-    console.log("USR_CREATE_IN:", { nome, email, role, useDb: USE_DB });
+    console.log("USR_CREATE_BODY:", { ct: req.headers["content-type"], body: req.body });
+    console.log("USR_CREATE_IN:", { nome, email, role, useDb: USE_DB, HAS_LEGACY_NAME_COL });
 
     if (!nome || !email || !senha) {
-      console.log("USR_CREATE_FAIL: missing fields");
       return res.redirect(`/configuracoes?error=${encodeURIComponent("Informe nome, email e senha.")}`);
     }
     if (senha.length < 6) {
-      console.log("USR_CREATE_FAIL: short password");
       return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
     }
 
@@ -1282,20 +1335,28 @@ app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, re
     if (USE_DB) {
       const exists = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1`, [email]);
       if (exists.rowCount) {
-        console.log("USR_CREATE_FAIL: email exists", email);
         return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
       }
 
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`, [
-        nome,
-        email,
-        hash,
-        role,
-      ]);
+      if (HAS_LEGACY_NAME_COL) {
+        await pool.query(
+          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,$4,true)`,
+          [nome, email, hash, role]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`,
+          [nome, email, hash, role]
+        );
+      }
+
+      // se existir password_hash também, sincroniza
+      if (HAS_LEGACY_PASSWORD_HASH_COL) {
+        await pool.query(`UPDATE users SET password_hash = senha_hash WHERE LOWER(email)=$1`, [email]);
+      }
     } else {
       const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
       if (exists) {
-        console.log("USR_CREATE_FAIL: email exists (mock)", email);
         return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
       }
 
@@ -1304,7 +1365,6 @@ app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, re
     }
 
     await auditLog(req.session.user.nome, "Criou usuário", `email=${email}, role=${role}`);
-    console.log("USR_CREATE_OK:", email);
     return res.redirect(`/configuracoes?success=${encodeURIComponent("Usuário criado.")}`);
   } catch (err) {
     console.error("USR_CREATE_ERR:", err);
@@ -1341,7 +1401,6 @@ app.post("/configuracoes/usuarios/:id/active", requireAdminOrDirector, async (re
     const active = String(req.body.active || "true") === "true";
     if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
 
-    // evita se desativar sozinho
     if (id === req.session.user.id && !active) {
       return res.redirect(`/configuracoes?error=${encodeURIComponent("Você não pode desativar o próprio usuário.")}`);
     }
@@ -1375,6 +1434,7 @@ app.post("/configuracoes/usuarios/:id/reset-senha", requireAdminOrDirector, asyn
 
     if (USE_DB) {
       await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, id]);
+      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash=$1 WHERE id=$2`, [hash, id]);
     } else {
       const u = mock.users.find((x) => x.id === id);
       if (u) u.senha_hash = hash;
