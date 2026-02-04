@@ -43,9 +43,12 @@
     return "text-bg-secondary";
   }
 
-  // UI: botão "Nova ocorrência" some para Financeiro (servidor já bloqueia)
   const role = (user && user.role) ? String(user.role).toLowerCase() : '';
+
+  // UI: botão "Nova ocorrência" some para Financeiro (servidor já bloqueia também)
   const canCreate = role !== 'financeiro';
+
+  const canAdminArea = (role === 'admin' || role === 'diretor');
 %>
 
 <div class="app">
@@ -64,8 +67,12 @@
       <% } %>
       <a class="active" href="/ocorrencias">🔎 Busca por Ocorrência</a>
       <a href="/relatorios">📊 Relatórios</a>
-      <a href="/configuracoes">⚙️ Configurações</a>
-      <a href="/auditoria">🧾 Auditoria</a>
+
+      <% if (canAdminArea) { %>
+        <a href="/configuracoes">⚙️ Configurações</a>
+        <a href="/auditoria">🧾 Auditoria</a>
+      <% } %>
+
       <hr class="my-2"/>
       <a href="/logout">🚪 Sair</a>
     </div>
