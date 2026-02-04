@@ -664,7 +664,9 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
         situacao: o.status,
       }));
     } else {
-      const base = canViewAllOcorrencias(req) ? mock.ocorrencias : mock.ocorrencias.filter((o) => o.created_by === req.session.user.id);
+      const base = canViewAllOcorrencias(req)
+        ? mock.ocorrencias
+        : mock.ocorrencias.filter((o) => o.created_by === req.session.user.id);
 
       lista = base
         .slice()
@@ -1376,12 +1378,22 @@ const PORT = process.env.PORT || 3000;
 
 (async () => {
   try {
+    // ✅ DIAGNÓSTICO (para ver nos Logs do Render)
+    console.log("🔎 DIAG:", {
+      hasPg: !!pg,
+      hasDatabaseUrl: !!process.env.DATABASE_URL,
+      databaseSsl: process.env.DATABASE_SSL,
+      useDb: USE_DB,
+      nodeEnv: process.env.NODE_ENV,
+    });
+
     if (USE_DB) {
       await dbInit();
-      console.log("✅ DB conectado e inicializado.");
+      console.log("🟢 MODO DATABASE (Postgres) — DB conectado e inicializado.");
     } else {
-      console.log("⚠️ Rodando em modo MOCK (sem DATABASE_URL).");
+      console.log("🔴 MODO MOCK (sem DATABASE_URL) — usuários NÃO ficam salvos após restart.");
     }
+
     app.listen(PORT, () => console.log(`🚀 Server rodando na porta ${PORT}`));
   } catch (err) {
     console.error("BOOT_ERR:", err);
