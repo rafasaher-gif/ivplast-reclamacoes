@@ -17,7 +17,7 @@
  *   DIRECTOR_NAME=...
  *   DIRECTOR_PASSWORD=...
  *
- *   UPLOAD_DIR=/var/data/uploads   (RECOMENDADO com disco persistente no Render)
+ *   UPLOAD_DIR=/var/data/uploads   (opcional, recomendado com disco persistente)
  */
 
 const path = require("path");
@@ -43,7 +43,6 @@ app.use(express.json());
 
 /* -----------------------------
    Uploads
-   DICA: Em produção use UPLOAD_DIR apontando para disco persistente do Render.
 ----------------------------- */
 const UPLOAD_DIR = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
@@ -109,13 +108,25 @@ function requireAuth(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
   next();
 }
+
 function userRole(req) {
   return String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
 }
+
 function isDirector(req) {
   const role = userRole(req);
   return role === "diretor" || role === "diretoria";
 }
+
+function isAdmin(req) {
+  return userRole(req) === "admin";
+}
+
+function canViewAllOcorrencias(req) {
+  // Admin e Diretor veem tudo
+  return isAdmin(req) || isDirector(req);
+}
+
 function requireDirector(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
   if (!isDirector(req)) return res.status(403).send("Acesso negado. Apenas Diretor(a).");
@@ -367,6 +378,7 @@ async function dbInit() {
   const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
+
   if (adminEmail && adminPass) {
     const hash = await bcrypt.hash(adminPass, 10);
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
@@ -385,10 +397,11 @@ async function dbInit() {
     }
   }
 
-  // ✅ Seed/Repair DIRECTOR (diretor(a))
+  // Seed/Repair DIRECTOR
   const dirEmail = String(process.env.DIRECTOR_EMAIL || "").trim().toLowerCase();
   const dirPass = String(process.env.DIRECTOR_PASSWORD || "");
   const dirName = process.env.DIRECTOR_NAME || "Diretor";
+
   if (dirEmail && dirPass) {
     const hash = await bcrypt.hash(dirPass, 10);
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
@@ -536,7 +549,14 @@ app.get("/dashboard", requireAuth, async (req, res) => {
     const motivos = { IVPLAST: 0, Cliente: 0, Transportadora: 0, Vendedor: 0 };
 
     if (USE_DB) {
-      const r = await pool.query(`SELECT motivo, status, custo_estimado, created_at, updated_at FROM ocorrencias`);
+      // ✅ permissão: admin/diretor vê tudo; outros só as próprias
+      let q = `SELECT motivo, status, custo_estimado, created_at, updated_at FROM ocorrencias`;
+      const params = [];
+      if (!canViewAllOcorrencias(req)) {
+        q += ` WHERE created_by=$1`;
+        params.push(req.session.user.id);
+      }
+      const r = await pool.query(q, params);
       const rows = r.rows;
 
       total = rows.length;
@@ -555,32 +575,26 @@ app.get("/dashboard", requireAuth, async (req, res) => {
         if (motivos[m] !== undefined) motivos[m] += 1;
       });
     } else {
-      total = mock.ocorrencias.length || 17;
-      abertas = mock.ocorrencias.filter((o) => String(o.status).toLowerCase() !== "resolvido").length || 2;
-      custoTotal = mock.ocorrencias.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0) || 35340;
+      total = mock.ocorrencias.length || 0;
+      abertas = mock.ocorrencias.filter((o) => String(o.status).toLowerCase() !== "resolvido").length || 0;
+      custoTotal = mock.ocorrencias.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0) || 0;
 
       const tempos = mock.ocorrencias.map((o) => hoursBetween(o.created_at, o.updated_at)).filter((n) => n > 0);
-      tempoMedioHoras = tempos.length ? Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length) : 26;
-
-      const fallback = [0, 0, 1, 2, 6, 3, 5, 2, 2, 2, 4];
-      for (let i = 0; i < 11; i++) serieSemanal[i] = fallback[i];
-
-      motivos.IVPLAST = 6;
-      motivos.Cliente = 5;
-      motivos.Transportadora = 4;
-      motivos.Vendedor = 2;
+      tempoMedioHoras = tempos.length ? Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length) : 0;
     }
 
+    // ✅ Custos: TODOS visualizam => sempre true
     res.render("dashboard", {
       usuario: req.session.user,
       kpis: {
-        totalOcorrencias: total || 17,
-        abertas: abertas || 2,
-        tempoMedioHoras: tempoMedioHoras || 26,
-        valorEstimado: custoTotal || 35340,
+        totalOcorrencias: total || 0,
+        abertas: abertas || 0,
+        tempoMedioHoras: tempoMedioHoras || 0,
+        valorEstimado: custoTotal || 0,
       },
       serieSemanal,
       motivosOcorrencia: motivos,
+      canSeeCost: true,
     });
   } catch (err) {
     console.error("DASH_ERR:", err);
@@ -596,12 +610,19 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
     let lista = [];
 
     if (USE_DB) {
-      const r = await pool.query(`
-        SELECT id, razao_social, created_at, updated_at, status
+      // ✅ permissão: admin/diretor vê tudo; outros só as próprias
+      let sql = `
+        SELECT id, razao_social, created_at, updated_at, status, created_by
         FROM ocorrencias
-        ORDER BY id DESC
-        LIMIT 200
-      `);
+      `;
+      const params = [];
+      if (!canViewAllOcorrencias(req)) {
+        sql += ` WHERE created_by=$1`;
+        params.push(req.session.user.id);
+      }
+      sql += ` ORDER BY id DESC LIMIT 200`;
+
+      const r = await pool.query(sql, params);
 
       lista = r.rows.map((o) => ({
         id: o.id,
@@ -612,7 +633,11 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
         situacao: o.status,
       }));
     } else {
-      lista = mock.ocorrencias
+      const base = canViewAllOcorrencias(req)
+        ? mock.ocorrencias
+        : mock.ocorrencias.filter(o => o.created_by === req.session.user.id);
+
+      lista = base
         .slice()
         .sort((a, b) => b.id - a.id)
         .slice(0, 200)
@@ -629,7 +654,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
     if (q) lista = lista.filter((o) => String(o.cliente).toLowerCase().includes(q) || String(o.id).includes(q));
     if (statusFilter) lista = lista.filter((o) => String(o.status) === statusFilter);
 
-    res.render("ocorrencias", { usuario: req.session.user, ocorrencias: lista, q });
+    res.render("ocorrencias", { usuario: req.session.user, ocorrencias: lista, q, canSeeCost: true });
   } catch (err) {
     console.error("OCORRENCIAS_ERR:", err);
     res.status(500).send("Erro ao listar ocorrências.");
@@ -638,12 +663,9 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 
 /* -------- /novo (GET) -------- */
 app.get("/novo", requireAuth, (req, res) => {
-  const role = userRole(req);
-  const canSeeCost = ["admin", "financeiro", "diretoria", "diretor"].includes(role);
-
   res.render("novo", {
     usuario: req.session.user,
-    canSeeCost,
+    canSeeCost: true, // ✅ TODOS veem custo
     error: null,
     success: null
   });
@@ -686,12 +708,9 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     const item_obs = String(req.body.item_obs || "").trim();
 
     if (!data.razao_social || !data.descricao) {
-      const role = userRole(req);
-      const canSeeCost = ["admin", "financeiro", "diretoria", "diretor"].includes(role);
-
       return res.status(400).render("novo", {
         usuario: req.session.user,
-        canSeeCost,
+        canSeeCost: true,
         error: "Preencha Razão social e Descrição.",
         success: null,
       });
@@ -771,7 +790,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         }
       }
 
-      // ✅ salvar anexos no DB
       const files = req.files || [];
       for (const f of files) {
         await pool.query(
@@ -817,13 +835,22 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   }
 });
 
-/* -------- Download de anexo (via DB) -------- */
+/* -------- Download de anexo -------- */
 app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
   const ocorrenciaId = safeInt(req.params.id, 0);
   const anexoId = safeInt(req.params.anexoId, 0);
   if (!ocorrenciaId || !anexoId) return res.status(400).send("Parâmetros inválidos.");
 
   try {
+    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
+    if (USE_DB && !canViewAllOcorrencias(req)) {
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
+        ocorrenciaId,
+        req.session.user.id,
+      ]);
+      if (!own.rowCount) return res.status(403).send("Acesso negado.");
+    }
+
     let anexo = null;
 
     if (USE_DB) {
@@ -845,13 +872,11 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
 
     const filePath = path.join(UPLOAD_DIR, anexo.filename);
     if (!fs.existsSync(filePath)) {
-      // isso confirma que o disco não é persistente ou o arquivo foi apagado
       return res
         .status(404)
         .send("Arquivo não está disponível no servidor. (Provável falta de disco persistente no Render).");
     }
 
-    // força download com o nome original
     return res.download(filePath, anexo.originalname);
   } catch (err) {
     console.error("ANEXO_DOWNLOAD_ERR:", err);
@@ -865,6 +890,15 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
   if (!id) return res.redirect("/ocorrencias");
 
   try {
+    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
+    if (USE_DB && !canViewAllOcorrencias(req)) {
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
+        id,
+        req.session.user.id,
+      ]);
+      if (!own.rowCount) return res.status(403).send("Acesso negado.");
+    }
+
     let ocorrencia = null;
     let itens = [];
     let anexos = [];
@@ -924,6 +958,10 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       const found = mock.ocorrencias.find((x) => x.id === id);
       if (!found) return res.redirect("/ocorrencias");
 
+      if (!canViewAllOcorrencias(req) && found.created_by !== req.session.user.id) {
+        return res.status(403).send("Acesso negado.");
+      }
+
       itens = found.itens || [];
       anexos = (found.anexos || []).map(a => ({
         id: a.id,
@@ -954,7 +992,9 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       ocorrencia,
       itens,
       anexos,
-      id
+      id,
+      canSeeCost: true, // ✅ TODOS veem custo
+      isDirector: isDirector(req),
     });
   } catch (err) {
     console.error("DETALHE_ERR:", err);
@@ -976,6 +1016,15 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
   }
 
   try {
+    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
+    if (USE_DB && !canViewAllOcorrencias(req)) {
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
+        id,
+        req.session.user.id,
+      ]);
+      if (!own.rowCount) return res.status(403).send("Acesso negado.");
+    }
+
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [
         status,
@@ -989,6 +1038,9 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
+        if (!canViewAllOcorrencias(req) && o.created_by !== req.session.user.id) {
+          return res.status(403).send("Acesso negado.");
+        }
         o.status = status;
         o.responsavel = responsavel;
         o.updated_at = nowISO();
@@ -1017,6 +1069,15 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   if (!comentario) return res.redirect(`/ocorrencias/${id}`);
 
   try {
+    // ✅ permissão: se não é admin/diretor, precisa ser dono da ocorrência
+    if (USE_DB && !canViewAllOcorrencias(req)) {
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
+        id,
+        req.session.user.id,
+      ]);
+      if (!own.rowCount) return res.status(403).send("Acesso negado.");
+    }
+
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET updated_at=NOW() WHERE id=$1`, [id]);
       await pool.query(
@@ -1026,6 +1087,9 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
+        if (!canViewAllOcorrencias(req) && o.created_by !== req.session.user.id) {
+          return res.status(403).send("Acesso negado.");
+        }
         o.updated_at = nowISO();
         o.atividades = o.atividades || [];
         o.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: comentario });
@@ -1087,7 +1151,7 @@ app.get("/auditoria", requireDirector, async (req, res) => {
   }
 });
 
-/* Static (mantém, mas o download oficial é pela rota /ocorrencias/:id/anexos/:anexoId) */
+/* Static */
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 /* Boot */
@@ -1107,3 +1171,4 @@ const PORT = process.env.PORT || 3000;
     process.exit(1);
   }
 })();
+
