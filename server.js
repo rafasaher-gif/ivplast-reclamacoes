@@ -2,7 +2,7 @@
  * server.js — IVPLAST Reclamações (Express + EJS + Session + Postgres)
  *
  * Dependências:
- *   npm i express ejs express-session bcryptjs pg multer bcryptjs
+ *   npm i express ejs express-session bcryptjs pg multer
  *
  * ENV (Render):
  *   SESSION_SECRET=...
@@ -42,18 +42,13 @@ app.set("trust proxy", 1);
 ----------------------------- */
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-
-// ✅ parsing de body (FORM e JSON)
-app.use(express.urlencoded({ extended: true })); // forms (application/x-www-form-urlencoded)
+app.use(express.urlencoded({ extended: true })); // forms
 app.use(express.json()); // json
 
 /* -----------------------------
    Uploads
 ----------------------------- */
-const UPLOAD_DIR = process.env.UPLOAD_DIR
-  ? path.resolve(process.env.UPLOAD_DIR)
-  : path.join(__dirname, "uploads");
-
+const UPLOAD_DIR = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const upload = multer({
@@ -104,14 +99,6 @@ if (USE_DB) {
   });
 }
 
-/**
- * ✅ Flags de compatibilidade (LEGADO)
- * Alguns bancos antigos têm colunas "name" e/ou "password_hash".
- * Em alguns casos, "name" está NOT NULL e quebra o insert.
- */
-let HAS_LEGACY_NAME_COL = false;
-let HAS_LEGACY_PASSWORD_HASH_COL = false;
-
 /* -----------------------------
    Helpers
 ----------------------------- */
@@ -122,7 +109,6 @@ function requireAuth(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
   next();
 }
-
 function userRole(req) {
   return String(req.session?.user?.role || "").toLowerCase();
 }
@@ -136,13 +122,9 @@ function isAdmin(req) {
 function canViewAllOcorrencias(req) {
   return isAdmin(req) || isDirector(req);
 }
-
-// ✅ Config/Auditoria/Usuários: Admin OU Diretor
 function requireAdminOrDirector(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
-  if (!(isAdmin(req) || isDirector(req))) {
-    return res.status(403).send("Acesso negado. Apenas Admin ou Diretor(a).");
-  }
+  if (!(isAdmin(req) || isDirector(req))) return res.status(403).send("Acesso negado. Apenas Admin ou Diretor(a).");
   next();
 }
 
@@ -199,15 +181,9 @@ function pickFirst(...values) {
 /* -----------------------------
    MOCK (sem DB)
 ----------------------------- */
-const mock = {
-  users: [],
-  settings: {},
-  ocorrencias: [],
-  auditoria: [],
-};
+const mock = { users: [], settings: {}, ocorrencias: [], auditoria: [] };
 
 function ensureMockUserFromEnv(kind) {
-  // kind: "admin" | "director"
   const emailEnv = kind === "director" ? "DIRECTOR_EMAIL" : "ADMIN_EMAIL";
   const passEnv = kind === "director" ? "DIRECTOR_PASSWORD" : "ADMIN_PASSWORD";
   const nameEnv = kind === "director" ? "DIRECTOR_NAME" : "ADMIN_NAME";
@@ -222,19 +198,52 @@ function ensureMockUserFromEnv(kind) {
   if (!exists) {
     const hash = bcrypt.hashSync(pass, 10);
     const id = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
-    mock.users.push({
-      id,
-      nome: name,
-      email,
-      senha_hash: hash,
-      role,
-      active: true,
-      created_at: nowISO(),
-    });
+    mock.users.push({ id, nome: name, email, senha_hash: hash, role, active: true, created_at: nowISO() });
   }
 }
 ensureMockUserFromEnv("admin");
 ensureMockUserFromEnv("director");
+
+/* -----------------------------
+   Legacy detection (DB)
+----------------------------- */
+let LEGACY = {
+  hasName: false,
+  hasPasswordHash: false,
+};
+
+async function detectLegacyColumns() {
+  if (!USE_DB) return;
+  const r = await pool.query(
+    `
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='users'
+  `
+  );
+  const cols = new Set(r.rows.map((x) => String(x.column_name).toLowerCase()));
+  LEGACY.hasName = cols.has("name");
+  LEGACY.hasPasswordHash = cols.has("password_hash");
+  console.log("LEGACY_COLS:", LEGACY);
+}
+
+async function dropNotNullIfExists(columnName) {
+  // Remove NOT NULL if column exists and is not nullable
+  const r = await pool.query(
+    `
+    SELECT is_nullable
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='users' AND column_name=$1
+  `,
+    [columnName]
+  );
+  if (!r.rowCount) return;
+  const isNullable = String(r.rows[0].is_nullable || "").toUpperCase() === "YES";
+  if (!isNullable) {
+    await pool.query(`ALTER TABLE users ALTER COLUMN ${columnName} DROP NOT NULL;`);
+    console.log(`✅ DROP NOT NULL em users.${columnName}`);
+  }
+}
 
 /* -----------------------------
    Settings/Auditoria (DB/MOCK)
@@ -250,13 +259,11 @@ async function upsertSetting(key, value) {
     [key, String(value)]
   );
 }
-
 async function getSetting(key, fallback = "") {
   if (!USE_DB) return mock.settings[key] ?? fallback;
   const r = await pool.query(`SELECT value FROM settings WHERE key=$1`, [key]);
   return r.rowCount ? r.rows[0].value : fallback;
 }
-
 async function auditLog(usuario, acao, alvo) {
   if (!USE_DB) {
     mock.auditoria.unshift({
@@ -273,9 +280,17 @@ async function auditLog(usuario, acao, alvo) {
 async function listUsers() {
   if (USE_DB) {
     const r = await pool.query(
-      `SELECT id, nome, email, role, active, created_at
-       FROM users
-       ORDER BY nome ASC NULLS LAST, id ASC`
+      `
+      SELECT
+        id,
+        COALESCE(nome, name) AS nome,
+        email,
+        role,
+        active,
+        created_at
+      FROM users
+      ORDER BY COALESCE(nome, name) ASC NULLS LAST, id ASC
+    `
     );
     return r.rows;
   }
@@ -298,7 +313,7 @@ async function listUsers() {
 async function dbInit() {
   if (!USE_DB) return;
 
-  // USERS (schema novo)
+  // tabela users (nova)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -311,47 +326,26 @@ async function dbInit() {
     );
   `);
 
-  // garante colunas do schema novo
+  // garante colunas novas
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nome TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS senha_hash TEXT;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW();`);
 
-  // ============================
-  // ✅ LEGADO: detectar colunas antigas (name/password_hash)
-  // e neutralizar NOT NULL em "name" (causador do seu erro)
-  // ============================
-  const legacyNameCol = await pool.query(`
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='users' AND column_name='name'
-    LIMIT 1
-  `);
-  HAS_LEGACY_NAME_COL = legacyNameCol.rowCount > 0;
+  // detecta legado
+  await detectLegacyColumns();
 
-  if (HAS_LEGACY_NAME_COL) {
-    // remove NOT NULL para não quebrar inserts
-    try {
-      await pool.query(`ALTER TABLE users ALTER COLUMN name DROP NOT NULL;`);
-    } catch (_) {}
+  // ✅ se legado existir e estiver NOT NULL, remove (para não bloquear inserts)
+  if (LEGACY.hasName) await dropNotNullIfExists("name");
+  if (LEGACY.hasPasswordHash) await dropNotNullIfExists("password_hash");
 
-    // preenche name com nome quando faltar
-    await pool.query(`UPDATE users SET name = COALESCE(name, nome) WHERE name IS NULL;`);
-
-    // também puxa "nome" do legado se necessário
+  // ✅ se legado existir, tenta “popular” campos novos a partir do legado (ou vice-versa)
+  if (LEGACY.hasName) {
     await pool.query(`UPDATE users SET nome = COALESCE(nome, name) WHERE nome IS NULL;`);
+    await pool.query(`UPDATE users SET name = COALESCE(name, nome) WHERE name IS NULL;`);
   }
-
-  const legacyPassCol = await pool.query(`
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='users' AND column_name='password_hash'
-    LIMIT 1
-  `);
-  HAS_LEGACY_PASSWORD_HASH_COL = legacyPassCol.rowCount > 0;
-
-  if (HAS_LEGACY_PASSWORD_HASH_COL) {
+  if (LEGACY.hasPasswordHash) {
     await pool.query(`UPDATE users SET senha_hash = COALESCE(senha_hash, password_hash) WHERE senha_hash IS NULL;`);
     await pool.query(`UPDATE users SET password_hash = COALESCE(password_hash, senha_hash) WHERE password_hash IS NULL;`);
   }
@@ -372,31 +366,25 @@ async function dbInit() {
       cnpj TEXT,
       numero_pedido TEXT,
       numero_nf TEXT,
-
       empresa TEXT NOT NULL DEFAULT 'IVPLAST',
-
       motivo TEXT NOT NULL,
       descricao TEXT NOT NULL,
-
       cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE,
       nfd_numero TEXT,
-
       custo_estimado NUMERIC(14,2) NOT NULL DEFAULT 0,
       responsavel TEXT NOT NULL DEFAULT 'Atendimento',
       status TEXT NOT NULL DEFAULT 'Aberto',
-
       created_by INTEGER REFERENCES users(id),
       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
   `);
 
-  // Migração/garantias
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS empresa TEXT NOT NULL DEFAULT 'IVPLAST';`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS nfd_numero TEXT;`);
 
-  // ✅ LEGADO: coluna "tipo" pode existir como NOT NULL no seu DB
+  // LEGADO: tipo
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS tipo TEXT;`);
   await pool.query(`UPDATE ocorrencias SET tipo = COALESCE(tipo, 'Comercial') WHERE tipo IS NULL;`);
   await pool.query(`ALTER TABLE ocorrencias ALTER COLUMN tipo SET DEFAULT 'Comercial';`);
@@ -447,21 +435,29 @@ async function dbInit() {
     );
   `);
 
-  // ============================
   // Seed/Repair ADMIN
-  // ============================
-  const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+  const adminEmail = cleanEmail(process.env.ADMIN_EMAIL || "");
   const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
 
   if (adminEmail && adminPass) {
     const hash = await bcrypt.hash(adminPass, 10);
-    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
 
+    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
     if (existing.rowCount === 0) {
-      if (HAS_LEGACY_NAME_COL) {
+      if (LEGACY.hasName && LEGACY.hasPasswordHash) {
         await pool.query(
-          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,'admin',true)`,
+          `INSERT INTO users (nome,name,email,senha_hash,password_hash,role,active) VALUES ($1,$1,$2,$3,$3,'admin',true)`,
+          [adminName, adminEmail, hash]
+        );
+      } else if (LEGACY.hasName) {
+        await pool.query(
+          `INSERT INTO users (nome,name,email,senha_hash,role,active) VALUES ($1,$1,$2,$3,'admin',true)`,
+          [adminName, adminEmail, hash]
+        );
+      } else if (LEGACY.hasPasswordHash) {
+        await pool.query(
+          `INSERT INTO users (nome,email,senha_hash,password_hash,role,active) VALUES ($1,$2,$3,$3,'admin',true)`,
           [adminName, adminEmail, hash]
         );
       } else {
@@ -473,32 +469,50 @@ async function dbInit() {
       console.log("✅ Admin criado via ENV.");
     } else {
       const id = existing.rows[0].id;
-      await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [adminName, id]);
-      if (HAS_LEGACY_NAME_COL) await pool.query(`UPDATE users SET name = COALESCE(name,$1) WHERE id=$2`, [adminName, id]);
 
-      await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
-      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash = $1 WHERE id=$2`, [hash, id]);
+      if (LEGACY.hasName) {
+        await pool.query(`UPDATE users SET nome = COALESCE(nome,$1), name = COALESCE(name,$1) WHERE id=$2`, [
+          adminName,
+          id,
+        ]);
+      } else {
+        await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [adminName, id]);
+      }
 
-      await pool.query(`UPDATE users SET role = 'admin', active=true WHERE id=$1`, [id]);
+      if (LEGACY.hasPasswordHash) {
+        await pool.query(`UPDATE users SET senha_hash=$1, password_hash=$1 WHERE id=$2`, [hash, id]);
+      } else {
+        await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, id]);
+      }
+
+      await pool.query(`UPDATE users SET role='admin', active=true WHERE id=$1`, [id]);
       console.log("✅ Admin atualizado via ENV (senha reset).");
     }
   }
 
-  // ============================
   // Seed/Repair DIRECTOR
-  // ============================
-  const dirEmail = String(process.env.DIRECTOR_EMAIL || "").trim().toLowerCase();
+  const dirEmail = cleanEmail(process.env.DIRECTOR_EMAIL || "");
   const dirPass = String(process.env.DIRECTOR_PASSWORD || "");
   const dirName = process.env.DIRECTOR_NAME || "Diretor";
 
   if (dirEmail && dirPass) {
     const hash = await bcrypt.hash(dirPass, 10);
-    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
 
+    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
     if (existing.rowCount === 0) {
-      if (HAS_LEGACY_NAME_COL) {
+      if (LEGACY.hasName && LEGACY.hasPasswordHash) {
         await pool.query(
-          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,'diretor',true)`,
+          `INSERT INTO users (nome,name,email,senha_hash,password_hash,role,active) VALUES ($1,$1,$2,$3,$3,'diretor',true)`,
+          [dirName, dirEmail, hash]
+        );
+      } else if (LEGACY.hasName) {
+        await pool.query(
+          `INSERT INTO users (nome,name,email,senha_hash,role,active) VALUES ($1,$1,$2,$3,'diretor',true)`,
+          [dirName, dirEmail, hash]
+        );
+      } else if (LEGACY.hasPasswordHash) {
+        await pool.query(
+          `INSERT INTO users (nome,email,senha_hash,password_hash,role,active) VALUES ($1,$2,$3,$3,'diretor',true)`,
           [dirName, dirEmail, hash]
         );
       } else {
@@ -510,13 +524,23 @@ async function dbInit() {
       console.log("✅ Diretor criado via ENV.");
     } else {
       const id = existing.rows[0].id;
-      await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [dirName, id]);
-      if (HAS_LEGACY_NAME_COL) await pool.query(`UPDATE users SET name = COALESCE(name,$1) WHERE id=$2`, [dirName, id]);
 
-      await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
-      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash = $1 WHERE id=$2`, [hash, id]);
+      if (LEGACY.hasName) {
+        await pool.query(`UPDATE users SET nome = COALESCE(nome,$1), name = COALESCE(name,$1) WHERE id=$2`, [
+          dirName,
+          id,
+        ]);
+      } else {
+        await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [dirName, id]);
+      }
 
-      await pool.query(`UPDATE users SET role = 'diretor', active=true WHERE id=$1`, [id]);
+      if (LEGACY.hasPasswordHash) {
+        await pool.query(`UPDATE users SET senha_hash=$1, password_hash=$1 WHERE id=$2`, [hash, id]);
+      } else {
+        await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, id]);
+      }
+
+      await pool.query(`UPDATE users SET role='diretor', active=true WHERE id=$1`, [id]);
       console.log("✅ Diretor atualizado via ENV (senha reset).");
     }
   }
@@ -524,11 +548,6 @@ async function dbInit() {
   await upsertSetting("adminEmail", process.env.ADMIN_EMAIL || "");
   await upsertSetting("adminName", process.env.ADMIN_NAME || "");
   await upsertSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)));
-
-  console.log("✅ DB Init OK", {
-    HAS_LEGACY_NAME_COL,
-    HAS_LEGACY_PASSWORD_HASH_COL,
-  });
 }
 
 /* -----------------------------
@@ -536,20 +555,6 @@ async function dbInit() {
 ----------------------------- */
 app.use((req, res, next) => {
   res.locals.usuario = req.session.user || null;
-  next();
-});
-
-/* -----------------------------
-   DEBUG (somente rotas de usuários)
------------------------------ */
-app.use((req, res, next) => {
-  if (req.method === "POST" && req.path.startsWith("/configuracoes/usuarios")) {
-    console.log("USR_POST_DEBUG:", {
-      path: req.path,
-      ct: req.headers["content-type"],
-      bodyKeys: req.body ? Object.keys(req.body) : [],
-    });
-  }
   next();
 });
 
@@ -564,7 +569,7 @@ app.get("/login", (req, res) => {
 });
 
 app.post("/login", async (req, res) => {
-  const email = String(req.body.email || "").trim().toLowerCase();
+  const email = cleanEmail(req.body.email);
   const senha = String(req.body.senha || "");
   if (!email || !senha) return res.status(400).render("login", { error: "Informe email e senha." });
 
@@ -573,10 +578,18 @@ app.post("/login", async (req, res) => {
 
     if (USE_DB) {
       const r = await pool.query(
-        `SELECT id, nome, email, senha_hash, role, active
-         FROM users
-         WHERE LOWER(email)=$1
-         LIMIT 1`,
+        `
+        SELECT
+          id,
+          COALESCE(nome, name) AS nome,
+          email,
+          COALESCE(senha_hash, password_hash) AS senha_hash,
+          role,
+          active
+        FROM users
+        WHERE LOWER(email)=$1
+        LIMIT 1
+      `,
         [email]
       );
       user = r.rowCount ? r.rows[0] : null;
@@ -607,40 +620,30 @@ app.get("/register", (req, res) => {
 });
 
 app.post("/register", async (req, res) => {
-  const nome = String(req.body.nome || "").trim();
-  const email = String(req.body.email || "").trim().toLowerCase();
+  const nome = cleanStr(req.body.nome);
+  const email = cleanEmail(req.body.email);
   const senha = String(req.body.senha || "");
   const senha2 = String(req.body.senha2 || "");
 
-  if (!nome || !email || !senha) {
-    return res.status(400).render("register", { error: "Preencha nome, email e senha.", success: null });
-  }
-  if (senha !== senha2) {
-    return res.status(400).render("register", { error: "As senhas não conferem.", success: null });
-  }
-  if (senha.length < 6) {
-    return res.status(400).render("register", { error: "Senha muito curta (mínimo 6 caracteres).", success: null });
-  }
+  if (!nome || !email || !senha) return res.status(400).render("register", { error: "Preencha nome, email e senha.", success: null });
+  if (senha !== senha2) return res.status(400).render("register", { error: "As senhas não conferem.", success: null });
+  if (senha.length < 6) return res.status(400).render("register", { error: "Senha muito curta (mínimo 6 caracteres).", success: null });
 
   try {
     const hash = await bcrypt.hash(senha, 10);
 
     if (USE_DB) {
       const exists = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1`, [email]);
-      if (exists.rowCount > 0) {
-        return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
-      }
+      if (exists.rowCount) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
 
-      if (HAS_LEGACY_NAME_COL) {
-        await pool.query(
-          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,'user',true)`,
-          [nome, email, hash]
-        );
+      if (LEGACY.hasName && LEGACY.hasPasswordHash) {
+        await pool.query(`INSERT INTO users (nome,name,email,senha_hash,password_hash,role,active) VALUES ($1,$1,$2,$3,$3,'user',true)`, [nome, email, hash]);
+      } else if (LEGACY.hasName) {
+        await pool.query(`INSERT INTO users (nome,name,email,senha_hash,role,active) VALUES ($1,$1,$2,$3,'user',true)`, [nome, email, hash]);
+      } else if (LEGACY.hasPasswordHash) {
+        await pool.query(`INSERT INTO users (nome,email,senha_hash,password_hash,role,active) VALUES ($1,$2,$3,$3,'user',true)`, [nome, email, hash]);
       } else {
-        await pool.query(
-          `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'user',true)`,
-          [nome, email, hash]
-        );
+        await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'user',true)`, [nome, email, hash]);
       }
     } else {
       const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
@@ -667,7 +670,7 @@ app.get("/logout", async (req, res) => {
 app.get("/esqueci-senha", (req, res) => res.redirect("/login"));
 
 /* -----------------------------
-   Rotas protegidas
+   Rotas protegidas (Dashboard / Ocorrências)
 ----------------------------- */
 app.get("/dashboard", requireAuth, async (req, res) => {
   try {
@@ -715,12 +718,7 @@ app.get("/dashboard", requireAuth, async (req, res) => {
 
     res.render("dashboard", {
       usuario: req.session.user,
-      kpis: {
-        totalOcorrencias: total || 0,
-        abertas: abertas || 0,
-        tempoMedioHoras: tempoMedioHoras || 0,
-        valorEstimado: custoTotal || 0,
-      },
+      kpis: { totalOcorrencias: total || 0, abertas: abertas || 0, tempoMedioHoras: tempoMedioHoras || 0, valorEstimado: custoTotal || 0 },
       serieSemanal,
       motivosOcorrencia: motivos,
       canSeeCost: true,
@@ -739,10 +737,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
     let lista = [];
 
     if (USE_DB) {
-      let sql = `
-        SELECT id, razao_social, created_at, updated_at, status, created_by
-        FROM ocorrencias
-      `;
+      let sql = `SELECT id, razao_social, created_at, updated_at, status, created_by FROM ocorrencias`;
       const params = [];
       if (!canViewAllOcorrencias(req)) {
         sql += ` WHERE created_by=$1`;
@@ -751,7 +746,6 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
       sql += ` ORDER BY id DESC LIMIT 200`;
 
       const r = await pool.query(sql, params);
-
       lista = r.rows.map((o) => ({
         id: o.id,
         cliente: o.razao_social,
@@ -761,10 +755,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
         situacao: o.status,
       }));
     } else {
-      const base = canViewAllOcorrencias(req)
-        ? mock.ocorrencias
-        : mock.ocorrencias.filter((o) => o.created_by === req.session.user.id);
-
+      const base = canViewAllOcorrencias(req) ? mock.ocorrencias : mock.ocorrencias.filter((o) => o.created_by === req.session.user.id);
       lista = base
         .slice()
         .sort((a, b) => b.id - a.id)
@@ -791,12 +782,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 
 /* -------- /novo (GET) -------- */
 app.get("/novo", requireAuth, (req, res) => {
-  res.render("novo", {
-    usuario: req.session.user,
-    canSeeCost: true,
-    error: null,
-    success: null,
-  });
+  res.render("novo", { usuario: req.session.user, canSeeCost: true, error: null, success: null });
 });
 
 /* -------- /novo (POST) -------- */
@@ -818,15 +804,11 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       cnpj: String(req.body.cnpj || "").trim(),
       numero_pedido: String(req.body.numero_pedido || "").trim(),
       numero_nf: String(req.body.numero_nf || "").trim(),
-
       empresa: String(req.body.empresa || "IVPLAST").trim(),
       motivo: String(req.body.motivo || "IVPLAST").trim(),
-
       cliente_emitiu_nfd: String(req.body.cliente_emitiu_nfd || "nao") === "sim",
       nfd_numero: String(req.body.nfd_numero || "").trim(),
-
       tipo: "Comercial",
-
       descricao: String(req.body.descricao || "").trim(),
       custo_estimado: safeFloat(req.body.custo_estimado, 0),
       responsavel: String(req.body.responsavel || "Atendimento").trim(),
@@ -835,14 +817,8 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     const item_obs = String(req.body.item_obs || "").trim();
 
     if (!data.razao_social || !data.descricao) {
-      return res.status(400).render("novo", {
-        usuario: req.session.user,
-        canSeeCost: true,
-        error: "Preencha Razão social e Descrição.",
-        success: null,
-      });
+      return res.status(400).render("novo", { usuario: req.session.user, canSeeCost: true, error: "Preencha Razão social e Descrição.", success: null });
     }
-
     if (!data.cliente_emitiu_nfd) data.nfd_numero = "";
 
     let newId = null;
@@ -867,15 +843,12 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
           data.cnpj || null,
           data.numero_pedido || null,
           data.numero_nf || null,
-
           data.empresa,
           data.motivo,
           data.tipo,
           data.descricao,
-
           data.cliente_emitiu_nfd,
           data.nfd_numero || null,
-
           data.custo_estimado,
           data.responsavel,
           req.session.user.id,
@@ -884,46 +857,29 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
       newId = r.rows[0].id;
 
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-        newId,
-        req.session.user.nome,
-        "Ocorrência criada.",
-      ]);
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [newId, req.session.user.nome, "Ocorrência criada."]);
 
       if (itemErrado) {
         const max = Math.min(10, itensDescricao.length);
-
         for (let i = 0; i < max; i++) {
           const desc = itensDescricao[i];
-
           let qtd = parseInt(itensQuantidadeRaw[i] || "", 10);
           if (!Number.isFinite(qtd)) qtd = null;
           if (qtd !== null) {
             if (qtd < 1) qtd = 1;
             if (qtd > 10000) qtd = 10000;
           }
-
-          await pool.query(
-            `INSERT INTO ocorrencia_itens (ocorrencia_id, descricao, quantidade)
-             VALUES ($1,$2,$3)`,
-            [newId, desc, qtd]
-          );
+          await pool.query(`INSERT INTO ocorrencia_itens (ocorrencia_id, descricao, quantidade) VALUES ($1,$2,$3)`, [newId, desc, qtd]);
         }
-
         if (item_obs) {
-          await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-            newId,
-            req.session.user.nome,
-            `Obs. itens: ${item_obs}`,
-          ]);
+          await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [newId, req.session.user.nome, `Obs. itens: ${item_obs}`]);
         }
       }
 
       const files = req.files || [];
       for (const f of files) {
         await pool.query(
-          `INSERT INTO ocorrencia_anexos (ocorrencia_id,filename,originalname,mimetype,size)
-           VALUES ($1,$2,$3,$4,$5)`,
+          `INSERT INTO ocorrencia_anexos (ocorrencia_id,filename,originalname,mimetype,size) VALUES ($1,$2,$3,$4,$5)`,
           [newId, f.filename, f.originalname, f.mimetype, f.size]
         );
       }
@@ -944,17 +900,9 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
           : [],
         atividades: [
           { quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." },
-          ...(itemErrado && item_obs
-            ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }]
-            : []),
+          ...(itemErrado && item_obs ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }] : []),
         ],
-        anexos: (req.files || []).map((f, idx) => ({
-          id: idx + 1,
-          filename: f.filename,
-          originalname: f.originalname,
-          mimetype: f.mimetype,
-          size: f.size,
-        })),
+        anexos: (req.files || []).map((f, idx) => ({ id: idx + 1, filename: f.filename, originalname: f.originalname, mimetype: f.mimetype, size: f.size })),
       });
     }
 
@@ -974,23 +922,13 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
 
   try {
     if (USE_DB && !canViewAllOcorrencias(req)) {
-      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
-        ocorrenciaId,
-        req.session.user.id,
-      ]);
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [ocorrenciaId, req.session.user.id]);
       if (!own.rowCount) return res.status(403).send("Acesso negado.");
     }
 
     let anexo = null;
-
     if (USE_DB) {
-      const r = await pool.query(
-        `SELECT id, ocorrencia_id, filename, originalname
-         FROM ocorrencia_anexos
-         WHERE id=$1 AND ocorrencia_id=$2
-         LIMIT 1`,
-        [anexoId, ocorrenciaId]
-      );
+      const r = await pool.query(`SELECT id, ocorrencia_id, filename, originalname FROM ocorrencia_anexos WHERE id=$1 AND ocorrencia_id=$2 LIMIT 1`, [anexoId, ocorrenciaId]);
       anexo = r.rowCount ? r.rows[0] : null;
     } else {
       const oc = mock.ocorrencias.find((o) => o.id === ocorrenciaId);
@@ -1002,9 +940,7 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
 
     const filePath = path.join(UPLOAD_DIR, anexo.filename);
     if (!fs.existsSync(filePath)) {
-      return res
-        .status(404)
-        .send("Arquivo não está disponível no servidor. (Provável falta de disco persistente no Render).");
+      return res.status(404).send("Arquivo não está disponível no servidor. (Provável falta de disco persistente no Render).");
     }
 
     return res.download(filePath, anexo.originalname);
@@ -1021,10 +957,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
 
   try {
     if (USE_DB && !canViewAllOcorrencias(req)) {
-      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
-        id,
-        req.session.user.id,
-      ]);
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [id, req.session.user.id]);
       if (!own.rowCount) return res.status(403).send("Acesso negado.");
     }
 
@@ -1034,34 +967,13 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
 
     if (USE_DB) {
       const r = await pool.query(`SELECT * FROM ocorrencias WHERE id=$1`, [id]);
-      if (r.rowCount === 0) return res.redirect("/ocorrencias");
+      if (!r.rowCount) return res.redirect("/ocorrencias");
       const o = r.rows[0];
 
-      const acts = await pool.query(
-        `SELECT quem, texto, created_at
-         FROM ocorrencia_atividades
-         WHERE ocorrencia_id=$1
-         ORDER BY id DESC
-         LIMIT 50`,
-        [id]
-      );
-
-      const itensR = await pool.query(
-        `SELECT descricao, quantidade
-         FROM ocorrencia_itens
-         WHERE ocorrencia_id=$1
-         ORDER BY id ASC`,
-        [id]
-      );
+      const acts = await pool.query(`SELECT quem, texto, created_at FROM ocorrencia_atividades WHERE ocorrencia_id=$1 ORDER BY id DESC LIMIT 50`, [id]);
+      const itensR = await pool.query(`SELECT descricao, quantidade FROM ocorrencia_itens WHERE ocorrencia_id=$1 ORDER BY id ASC`, [id]);
       itens = itensR.rows || [];
-
-      const anexosR = await pool.query(
-        `SELECT id, originalname, size, created_at
-         FROM ocorrencia_anexos
-         WHERE ocorrencia_id=$1
-         ORDER BY id DESC`,
-        [id]
-      );
+      const anexosR = await pool.query(`SELECT id, originalname, size, created_at FROM ocorrencia_anexos WHERE ocorrencia_id=$1 ORDER BY id DESC`, [id]);
       anexos = anexosR.rows || [];
 
       ocorrencia = {
@@ -1077,27 +989,15 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
         custo: Number(o.custo_estimado || 0),
         responsavel: o.responsavel,
         descricao: o.descricao,
-        atividades: acts.rows.map((a) => ({
-          quando: daysAgoText(a.created_at),
-          quem: a.quem,
-          texto: a.texto,
-        })),
+        atividades: acts.rows.map((a) => ({ quando: daysAgoText(a.created_at), quem: a.quem, texto: a.texto })),
       };
     } else {
       const found = mock.ocorrencias.find((x) => x.id === id);
       if (!found) return res.redirect("/ocorrencias");
-
-      if (!canViewAllOcorrencias(req) && found.created_by !== req.session.user.id) {
-        return res.status(403).send("Acesso negado.");
-      }
+      if (!canViewAllOcorrencias(req) && found.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
       itens = found.itens || [];
-      anexos = (found.anexos || []).map((a) => ({
-        id: a.id,
-        originalname: a.originalname,
-        size: a.size,
-        created_at: found.created_at || nowISO(),
-      }));
+      anexos = (found.anexos || []).map((a) => ({ id: a.id, originalname: a.originalname, size: a.size, created_at: found.created_at || nowISO() }));
 
       ocorrencia = {
         id: found.id,
@@ -1116,15 +1016,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       };
     }
 
-    res.render("ocorrencia_detalhe", {
-      usuario: req.session.user,
-      ocorrencia,
-      itens,
-      anexos,
-      id,
-      canSeeCost: true,
-      isDirector: isDirector(req),
-    });
+    res.render("ocorrencia_detalhe", { usuario: req.session.user, ocorrencia, itens, anexos, id, canSeeCost: true, isDirector: isDirector(req) });
   } catch (err) {
     console.error("DETALHE_ERR:", err);
     res.status(500).send("Erro ao carregar ocorrência.");
@@ -1139,25 +1031,16 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
   const status = String(req.body.status || "").trim() || "Aberto";
   const responsavel = String(req.body.responsavel || "").trim() || "Atendimento";
 
-  if (normalizeStatus(status) === "resolvido" && !isDirector(req)) {
-    return res.status(403).send("Apenas Diretor(a) pode alterar o status para 'Resolvido'.");
-  }
+  if (normalizeStatus(status) === "resolvido" && !isDirector(req)) return res.status(403).send("Apenas Diretor(a) pode alterar o status para 'Resolvido'.");
 
   try {
     if (USE_DB && !canViewAllOcorrencias(req)) {
-      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
-        id,
-        req.session.user.id,
-      ]);
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [id, req.session.user.id]);
       if (!own.rowCount) return res.status(403).send("Acesso negado.");
     }
 
     if (USE_DB) {
-      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [
-        status,
-        responsavel,
-        id,
-      ]);
+      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [status, responsavel, id]);
       await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
         id,
         req.session.user.nome,
@@ -1166,18 +1049,12 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
-        if (!canViewAllOcorrencias(req) && o.created_by !== req.session.user.id) {
-          return res.status(403).send("Acesso negado.");
-        }
+        if (!canViewAllOcorrencias(req) && o.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
         o.status = status;
         o.responsavel = responsavel;
         o.updated_at = nowISO();
         o.atividades = o.atividades || [];
-        o.atividades.unshift({
-          quando: "agora",
-          quem: req.session.user.nome,
-          texto: `Atualizou: status=${status}, responsável=${responsavel}.`,
-        });
+        o.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: `Atualizou: status=${status}, responsável=${responsavel}.` });
       }
     }
 
@@ -1198,26 +1075,17 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
 
   try {
     if (USE_DB && !canViewAllOcorrencias(req)) {
-      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [
-        id,
-        req.session.user.id,
-      ]);
+      const own = await pool.query(`SELECT id FROM ocorrencias WHERE id=$1 AND created_by=$2 LIMIT 1`, [id, req.session.user.id]);
       if (!own.rowCount) return res.status(403).send("Acesso negado.");
     }
 
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET updated_at=NOW() WHERE id=$1`, [id]);
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-        id,
-        req.session.user.nome,
-        comentario,
-      ]);
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [id, req.session.user.nome, comentario]);
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
-        if (!canViewAllOcorrencias(req) && o.created_by !== req.session.user.id) {
-          return res.status(403).send("Acesso negado.");
-        }
+        if (!canViewAllOcorrencias(req) && o.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
         o.updated_at = nowISO();
         o.atividades = o.atividades || [];
         o.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: comentario });
@@ -1241,7 +1109,9 @@ app.get("/relatorios", requireAuth, async (req, res) => {
   }
 });
 
-/* ✅ Configurações e Auditoria: Admin OU Diretor */
+/* -----------------------------
+   Configurações / Usuários / Auditoria
+----------------------------- */
 app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
   try {
     const config = {
@@ -1251,7 +1121,6 @@ app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
     };
 
     const users = await listUsers();
-
     const success = req.query.success ? String(req.query.success) : null;
     const error = req.query.error ? String(req.query.error) : null;
 
@@ -1262,15 +1131,12 @@ app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
   }
 });
 
-/* ✅ POST /configuracoes/admin */
 app.post("/configuracoes/admin", requireAdminOrDirector, async (req, res) => {
   try {
     const adminEmail = String(req.body.adminEmail || "").trim();
     const adminName = String(req.body.adminName || "").trim();
-
     await upsertSetting("adminEmail", adminEmail);
     await upsertSetting("adminName", adminName);
-
     await auditLog(req.session.user.nome, "Atualizou configurações", "Admin (email/nome)");
     return res.redirect(`/configuracoes?success=${encodeURIComponent("Admin atualizado.")}`);
   } catch (err) {
@@ -1279,24 +1145,21 @@ app.post("/configuracoes/admin", requireAdminOrDirector, async (req, res) => {
   }
 });
 
-/* ✅ POST /configuracoes/senha */
 app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
   try {
     const novaSenha = String(req.body.novaSenha || "");
     const novaSenha2 = String(req.body.novaSenha2 || "");
-
-    if (!novaSenha || novaSenha.length < 6) {
-      return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
-    }
-    if (novaSenha !== novaSenha2) {
-      return res.redirect(`/configuracoes?error=${encodeURIComponent("As senhas não conferem.")}`);
-    }
+    if (!novaSenha || novaSenha.length < 6) return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
+    if (novaSenha !== novaSenha2) return res.redirect(`/configuracoes?error=${encodeURIComponent("As senhas não conferem.")}`);
 
     const hash = await bcrypt.hash(novaSenha, 10);
 
     if (USE_DB) {
-      await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
-      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
+      if (LEGACY.hasPasswordHash) {
+        await pool.query(`UPDATE users SET senha_hash=$1, password_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
+      } else {
+        await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
+      }
     } else {
       const u = mock.users.find((x) => x.id === req.session.user.id);
       if (u) u.senha_hash = hash;
@@ -1310,8 +1173,6 @@ app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
   }
 });
 
-/* ✅ Gestão de Usuários (Admin/Diretor) */
-
 // criar usuário
 app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, res) => {
   try {
@@ -1320,46 +1181,27 @@ app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, re
     const senha = String(pickFirst(req.body.senha, req.body.password, req.body.pass) || "");
     const role = cleanStr(pickFirst(req.body.role, req.body.cargo, req.body.perfil, "user")).toLowerCase();
 
-    console.log("USR_CREATE_BODY:", { ct: req.headers["content-type"], body: req.body });
-    console.log("USR_CREATE_IN:", { nome, email, role, useDb: USE_DB, HAS_LEGACY_NAME_COL });
-
-    if (!nome || !email || !senha) {
-      return res.redirect(`/configuracoes?error=${encodeURIComponent("Informe nome, email e senha.")}`);
-    }
-    if (senha.length < 6) {
-      return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
-    }
+    if (!nome || !email || !senha) return res.redirect(`/configuracoes?error=${encodeURIComponent("Informe nome, email e senha.")}`);
+    if (senha.length < 6) return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
 
     const hash = await bcrypt.hash(senha, 10);
 
     if (USE_DB) {
       const exists = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1`, [email]);
-      if (exists.rowCount) {
-        return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
-      }
+      if (exists.rowCount) return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
 
-      if (HAS_LEGACY_NAME_COL) {
-        await pool.query(
-          `INSERT INTO users (nome, name, email, senha_hash, role, active) VALUES ($1,$1,$2,$3,$4,true)`,
-          [nome, email, hash, role]
-        );
+      if (LEGACY.hasName && LEGACY.hasPasswordHash) {
+        await pool.query(`INSERT INTO users (nome,name,email,senha_hash,password_hash,role,active) VALUES ($1,$1,$2,$3,$3,$4,true)`, [nome, email, hash, role]);
+      } else if (LEGACY.hasName) {
+        await pool.query(`INSERT INTO users (nome,name,email,senha_hash,role,active) VALUES ($1,$1,$2,$3,$4,true)`, [nome, email, hash, role]);
+      } else if (LEGACY.hasPasswordHash) {
+        await pool.query(`INSERT INTO users (nome,email,senha_hash,password_hash,role,active) VALUES ($1,$2,$3,$3,$4,true)`, [nome, email, hash, role]);
       } else {
-        await pool.query(
-          `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`,
-          [nome, email, hash, role]
-        );
-      }
-
-      // se existir password_hash também, sincroniza
-      if (HAS_LEGACY_PASSWORD_HASH_COL) {
-        await pool.query(`UPDATE users SET password_hash = senha_hash WHERE LOWER(email)=$1`, [email]);
+        await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`, [nome, email, hash, role]);
       }
     } else {
       const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
-      if (exists) {
-        return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
-      }
-
+      if (exists) return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
       const id = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
       mock.users.push({ id, nome, email, senha_hash: hash, role, active: true, created_at: nowISO() });
     }
@@ -1379,9 +1221,8 @@ app.post("/configuracoes/usuarios/:id/role", requireAdminOrDirector, async (req,
     const role = cleanStr(pickFirst(req.body.role, req.body.cargo, "user")).toLowerCase();
     if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
 
-    if (USE_DB) {
-      await pool.query(`UPDATE users SET role=$1 WHERE id=$2`, [role, id]);
-    } else {
+    if (USE_DB) await pool.query(`UPDATE users SET role=$1 WHERE id=$2`, [role, id]);
+    else {
       const u = mock.users.find((x) => x.id === id);
       if (u) u.role = role;
     }
@@ -1400,14 +1241,10 @@ app.post("/configuracoes/usuarios/:id/active", requireAdminOrDirector, async (re
     const id = safeInt(req.params.id, 0);
     const active = String(req.body.active || "true") === "true";
     if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
+    if (id === req.session.user.id && !active) return res.redirect(`/configuracoes?error=${encodeURIComponent("Você não pode desativar o próprio usuário.")}`);
 
-    if (id === req.session.user.id && !active) {
-      return res.redirect(`/configuracoes?error=${encodeURIComponent("Você não pode desativar o próprio usuário.")}`);
-    }
-
-    if (USE_DB) {
-      await pool.query(`UPDATE users SET active=$1 WHERE id=$2`, [active, id]);
-    } else {
+    if (USE_DB) await pool.query(`UPDATE users SET active=$1 WHERE id=$2`, [active, id]);
+    else {
       const u = mock.users.find((x) => x.id === id);
       if (u) u.active = active;
     }
@@ -1426,15 +1263,13 @@ app.post("/configuracoes/usuarios/:id/reset-senha", requireAdminOrDirector, asyn
     const id = safeInt(req.params.id, 0);
     const novaSenha = String(req.body.novaSenha || "");
     if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
-    if (!novaSenha || novaSenha.length < 6) {
-      return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
-    }
+    if (!novaSenha || novaSenha.length < 6) return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
 
     const hash = await bcrypt.hash(novaSenha, 10);
 
     if (USE_DB) {
-      await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, id]);
-      if (HAS_LEGACY_PASSWORD_HASH_COL) await pool.query(`UPDATE users SET password_hash=$1 WHERE id=$2`, [hash, id]);
+      if (LEGACY.hasPasswordHash) await pool.query(`UPDATE users SET senha_hash=$1, password_hash=$1 WHERE id=$2`, [hash, id]);
+      else await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, id]);
     } else {
       const u = mock.users.find((x) => x.id === id);
       if (u) u.senha_hash = hash;
@@ -1451,19 +1286,12 @@ app.post("/configuracoes/usuarios/:id/reset-senha", requireAdminOrDirector, asyn
 app.get("/auditoria", requireAdminOrDirector, async (req, res) => {
   try {
     let auditoria = [];
-
     if (USE_DB) {
       const r = await pool.query(`SELECT quando, usuario, acao, alvo FROM auditoria ORDER BY id DESC LIMIT 200`);
-      auditoria = r.rows.map((x) => ({
-        quando: new Date(x.quando).toISOString().slice(0, 16).replace("T", " "),
-        usuario: x.usuario,
-        acao: x.acao,
-        alvo: x.alvo,
-      }));
+      auditoria = r.rows.map((x) => ({ quando: new Date(x.quando).toISOString().slice(0, 16).replace("T", " "), usuario: x.usuario, acao: x.acao, alvo: x.alvo }));
     } else {
       auditoria = mock.auditoria.slice(0, 200);
     }
-
     res.render("auditoria", { usuario: req.session.user, auditoria });
   } catch (err) {
     console.error("AUDIT_ERR:", err);
@@ -1479,23 +1307,13 @@ const PORT = process.env.PORT || 3000;
 
 (async () => {
   try {
-    const diag = {
-      hasPg: !!pg,
-      hasDatabaseUrl: !!process.env.DATABASE_URL,
-      databaseSsl: String(process.env.DATABASE_SSL || ""),
-      useDb: USE_DB,
-      nodeEnv: process.env.NODE_ENV || "dev",
-      port: PORT,
-    };
-    console.log("DIAG:", diag);
-
+    console.log("DIAG:", { useDb: USE_DB, hasPg: !!pg, databaseSsl: String(process.env.DATABASE_SSL || ""), nodeEnv: process.env.NODE_ENV || "dev", port: PORT });
     if (USE_DB) {
       await dbInit();
-      console.log("✅ MODO DATABASE (Postgres) — DB conectado e inicializado.");
+      console.log("✅ DB conectado e inicializado (com compatibilidade legacy).");
     } else {
-      console.log("⚠️ MODO MOCK (sem DATABASE_URL).");
+      console.log("⚠️ Rodando em modo MOCK (sem DATABASE_URL).");
     }
-
     app.listen(PORT, () => console.log(`🚀 Server rodando na porta ${PORT}`));
   } catch (err) {
     console.error("BOOT_ERR:", err);
