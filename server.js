@@ -28,7 +28,11 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 
 let pg;
-try { pg = require("pg"); } catch (_) { pg = null; }
+try {
+  pg = require("pg");
+} catch (_) {
+  pg = null;
+}
 
 const app = express();
 app.set("trust proxy", 1);
@@ -110,20 +114,16 @@ function requireAuth(req, res, next) {
 }
 
 function userRole(req) {
-  return String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
+  return String(req.session?.user?.role || "").toLowerCase();
 }
-
 function isDirector(req) {
   const role = userRole(req);
   return role === "diretor" || role === "diretoria";
 }
-
 function isAdmin(req) {
   return userRole(req) === "admin";
 }
-
 function canViewAllOcorrencias(req) {
-  // Admin e Diretor veem tudo
   return isAdmin(req) || isDirector(req);
 }
 
@@ -184,26 +184,26 @@ const mock = {
 function ensureMockUserFromEnv(kind) {
   // kind: "admin" | "director"
   const emailEnv = kind === "director" ? "DIRECTOR_EMAIL" : "ADMIN_EMAIL";
-  const passEnv  = kind === "director" ? "DIRECTOR_PASSWORD" : "ADMIN_PASSWORD";
-  const nameEnv  = kind === "director" ? "DIRECTOR_NAME" : "ADMIN_NAME";
-  const role     = kind === "director" ? "diretor" : "admin";
+  const passEnv = kind === "director" ? "DIRECTOR_PASSWORD" : "ADMIN_PASSWORD";
+  const nameEnv = kind === "director" ? "DIRECTOR_NAME" : "ADMIN_NAME";
+  const role = kind === "director" ? "diretor" : "admin";
 
   const email = String(process.env[emailEnv] || "").trim().toLowerCase();
-  const pass  = String(process.env[passEnv] || "");
-  const name  = process.env[nameEnv] || (kind === "director" ? "Diretor" : "Admin");
+  const pass = String(process.env[passEnv] || "");
+  const name = process.env[nameEnv] || (kind === "director" ? "Diretor" : "Admin");
   if (!email || !pass) return;
 
-  const exists = mock.users.find((u) => u.email.toLowerCase() === email);
+  const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
   if (!exists) {
     const hash = bcrypt.hashSync(pass, 10);
-    const id = mock.users.length ? Math.max(...mock.users.map(u => u.id)) + 1 : 1;
+    const id = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
     mock.users.push({
       id,
       nome: name,
       email,
       senha_hash: hash,
       role,
-      active: true, // ✅
+      active: true,
       created_at: nowISO(),
     });
   }
@@ -243,6 +243,28 @@ async function auditLog(usuario, acao, alvo) {
     return;
   }
   await pool.query(`INSERT INTO auditoria (usuario,acao,alvo) VALUES ($1,$2,$3)`, [usuario, acao, alvo]);
+}
+
+async function listUsers() {
+  if (USE_DB) {
+    const r = await pool.query(
+      `SELECT id, nome, email, role, active, created_at
+       FROM users
+       ORDER BY nome ASC NULLS LAST, id ASC`
+    );
+    return r.rows;
+  }
+  return mock.users
+    .slice()
+    .sort((a, b) => String(a.nome || "").localeCompare(String(b.nome || "")))
+    .map((u) => ({
+      id: u.id,
+      nome: u.nome,
+      email: u.email,
+      role: u.role,
+      active: u.active === undefined ? true : !!u.active,
+      created_at: u.created_at,
+    }));
 }
 
 /* -----------------------------
@@ -390,9 +412,10 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'admin',true)`, [
-        adminName, adminEmail, hash,
-      ]);
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'admin',true)`,
+        [adminName, adminEmail, hash]
+      );
       console.log("✅ Admin criado via ENV.");
     } else {
       const id = existing.rows[0].id;
@@ -413,9 +436,10 @@ async function dbInit() {
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
 
     if (existing.rowCount === 0) {
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'diretor',true)`, [
-        dirName, dirEmail, hash,
-      ]);
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,'diretor',true)`,
+        [dirName, dirEmail, hash]
+      );
       console.log("✅ Diretor criado via ENV.");
     } else {
       const id = existing.rows[0].id;
@@ -467,13 +491,13 @@ app.post("/login", async (req, res) => {
       );
       user = r.rowCount ? r.rows[0] : null;
     } else {
-      user = mock.users.find((u) => u.email.toLowerCase() === email);
+      user = mock.users.find((u) => String(u.email).toLowerCase() === email);
     }
 
     if (!user || !user.senha_hash) return res.status(401).render("login", { error: "Usuário ou senha inválidos." });
 
     // ✅ bloqueia usuário inativo
-    const isActive = (user.active === undefined) ? true : !!user.active;
+    const isActive = user.active === undefined ? true : !!user.active;
     if (!isActive) return res.status(403).render("login", { error: "Usuário inativo. Fale com o administrador." });
 
     const ok = await bcrypt.compare(senha, user.senha_hash);
@@ -522,7 +546,7 @@ app.post("/register", async (req, res) => {
         [nome, email, hash]
       );
     } else {
-      const exists = mock.users.find((u) => u.email.toLowerCase() === email);
+      const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
       if (exists) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       const id = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
       mock.users.push({ id, nome, email, senha_hash: hash, role: "user", active: true, created_at: nowISO() });
@@ -640,9 +664,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
         situacao: o.status,
       }));
     } else {
-      const base = canViewAllOcorrencias(req)
-        ? mock.ocorrencias
-        : mock.ocorrencias.filter(o => o.created_by === req.session.user.id);
+      const base = canViewAllOcorrencias(req) ? mock.ocorrencias : mock.ocorrencias.filter((o) => o.created_by === req.session.user.id);
 
       lista = base
         .slice()
@@ -674,7 +696,7 @@ app.get("/novo", requireAuth, (req, res) => {
     usuario: req.session.user,
     canSeeCost: true,
     error: null,
-    success: null
+    success: null,
   });
 });
 
@@ -683,12 +705,12 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   try {
     const itensDescricao = []
       .concat(req.body["itens_descricao[]"] || req.body.itens_descricao || [])
-      .map(v => String(v || "").trim())
-      .filter(v => v.length > 0);
+      .map((v) => String(v || "").trim())
+      .filter((v) => v.length > 0);
 
     const itensQuantidadeRaw = []
       .concat(req.body["itens_quantidade[]"] || req.body.itens_quantidade || [])
-      .map(v => String(v || "").trim());
+      .map((v) => String(v || "").trim());
 
     const itemErrado = String(req.body.item_errado || "nao") === "sim";
 
@@ -763,10 +785,11 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
       newId = r.rows[0].id;
 
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [newId, req.session.user.nome, "Ocorrência criada."]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+        newId,
+        req.session.user.nome,
+        "Ocorrência criada.",
+      ]);
 
       if (itemErrado) {
         const max = Math.min(10, itensDescricao.length);
@@ -789,10 +812,11 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         }
 
         if (item_obs) {
-          await pool.query(
-            `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-            [newId, req.session.user.nome, `Obs. itens: ${item_obs}`]
-          );
+          await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+            newId,
+            req.session.user.nome,
+            `Obs. itens: ${item_obs}`,
+          ]);
         }
       }
 
@@ -821,7 +845,9 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
           : [],
         atividades: [
           { quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." },
-          ...(itemErrado && item_obs ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }] : []),
+          ...(itemErrado && item_obs
+            ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }]
+            : []),
         ],
         anexos: (req.files || []).map((f, idx) => ({
           id: idx + 1,
@@ -869,8 +895,8 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
       );
       anexo = r.rowCount ? r.rows[0] : null;
     } else {
-      const oc = mock.ocorrencias.find(o => o.id === ocorrenciaId);
-      anexo = oc ? (oc.anexos || []).find(a => a.id === anexoId) : null;
+      const oc = mock.ocorrencias.find((o) => o.id === ocorrenciaId);
+      anexo = oc ? (oc.anexos || []).find((a) => a.id === anexoId) : null;
       if (anexo) anexo.ocorrencia_id = ocorrenciaId;
     }
 
@@ -969,7 +995,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       }
 
       itens = found.itens || [];
-      anexos = (found.anexos || []).map(a => ({
+      anexos = (found.anexos || []).map((a) => ({
         id: a.id,
         originalname: a.originalname,
         size: a.size,
@@ -1035,10 +1061,11 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
         responsavel,
         id,
       ]);
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [id, req.session.user.nome, `Atualizou: status=${status}, responsável=${responsavel}.`]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+        id,
+        req.session.user.nome,
+        `Atualizou: status=${status}, responsável=${responsavel}.`,
+      ]);
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -1083,10 +1110,11 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
 
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET updated_at=NOW() WHERE id=$1`, [id]);
-      await pool.query(
-        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
-        [id, req.session.user.nome, comentario]
-      );
+      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
+        id,
+        req.session.user.nome,
+        comentario,
+      ]);
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -1125,16 +1153,13 @@ app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
       databaseSSL: envBool(await getSetting("databaseSSL", String(envBool(process.env.DATABASE_SSL)))),
     };
 
-    // ✅ lista de usuários (para você gerenciar no painel)
-    let users = [];
-    if (USE_DB) {
-      const r = await pool.query(`SELECT id, nome, email, role, active, created_at FROM users ORDER BY nome ASC`);
-      users = r.rows;
-    } else {
-      users = mock.users.slice().sort((a,b)=>String(a.nome).localeCompare(String(b.nome)));
-    }
+    const users = await listUsers();
 
-    res.render("configuracoes", { usuario: req.session.user, config, users, success: null, error: null });
+    // ✅ mensagens via querystring
+    const success = req.query.success ? String(req.query.success) : null;
+    const error = req.query.error ? String(req.query.error) : null;
+
+    res.render("configuracoes", { usuario: req.session.user, config, users, success, error });
   } catch (err) {
     console.error("CFG_GET_ERR:", err);
     res.status(500).send("Erro ao carregar configurações.");
@@ -1145,18 +1170,16 @@ app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
 app.post("/configuracoes/admin", requireAdminOrDirector, async (req, res) => {
   try {
     const adminEmail = String(req.body.adminEmail || "").trim();
-    const adminName  = String(req.body.adminName || "").trim();
+    const adminName = String(req.body.adminName || "").trim();
 
     await upsertSetting("adminEmail", adminEmail);
     await upsertSetting("adminName", adminName);
 
     await auditLog(req.session.user.nome, "Atualizou configurações", "Admin (email/nome)");
-
-    // recarrega página
-    return res.redirect("/configuracoes");
+    return res.redirect(`/configuracoes?success=${encodeURIComponent("Admin atualizado.")}`);
   } catch (err) {
     console.error("CFG_ADMIN_POST_ERR:", err);
-    return res.status(500).send("Erro ao salvar configurações.");
+    return res.redirect(`/configuracoes?error=${encodeURIComponent("Erro ao salvar configurações.")}`);
   }
 });
 
@@ -1165,26 +1188,30 @@ app.post("/configuracoes/admin", requireAdminOrDirector, async (req, res) => {
 */
 app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
   try {
-    const novaSenha  = String(req.body.novaSenha || "");
+    const novaSenha = String(req.body.novaSenha || "");
     const novaSenha2 = String(req.body.novaSenha2 || "");
 
-    if (!novaSenha || novaSenha.length < 6) return res.status(400).send("Senha muito curta (mínimo 6).");
-    if (novaSenha !== novaSenha2) return res.status(400).send("As senhas não conferem.");
+    if (!novaSenha || novaSenha.length < 6) {
+      return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
+    }
+    if (novaSenha !== novaSenha2) {
+      return res.redirect(`/configuracoes?error=${encodeURIComponent("As senhas não conferem.")}`);
+    }
 
     const hash = await bcrypt.hash(novaSenha, 10);
 
     if (USE_DB) {
       await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, req.session.user.id]);
     } else {
-      const u = mock.users.find(x => x.id === req.session.user.id);
+      const u = mock.users.find((x) => x.id === req.session.user.id);
       if (u) u.senha_hash = hash;
     }
 
     await auditLog(req.session.user.nome, "Alterou a própria senha", `userId=${req.session.user.id}`);
-    return res.redirect("/configuracoes");
+    return res.redirect(`/configuracoes?success=${encodeURIComponent("Senha alterada.")}`);
   } catch (err) {
     console.error("CFG_SENHA_POST_ERR:", err);
-    return res.status(500).send("Erro ao alterar senha.");
+    return res.redirect(`/configuracoes?error=${encodeURIComponent("Erro ao alterar senha.")}`);
   }
 });
 
@@ -1198,37 +1225,47 @@ app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
 // criar usuário
 app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, res) => {
   try {
-    const nome  = String(req.body.nome || "").trim();
+    const nome = String(req.body.nome || "").trim();
     const email = String(req.body.email || "").trim().toLowerCase();
-    const role  = String(req.body.role || "user").trim();
+    const role = String(req.body.role || "user").trim();
     const senha = String(req.body.senha || "");
 
-    if (!nome || !email || !senha) return res.status(400).send("Informe nome, email e senha.");
-    if (senha.length < 6) return res.status(400).send("Senha muito curta (mínimo 6).");
+    if (!nome || !email || !senha) {
+      return res.redirect(`/configuracoes?error=${encodeURIComponent("Informe nome, email e senha.")}`);
+    }
+    if (senha.length < 6) {
+      return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
+    }
 
     const hash = await bcrypt.hash(senha, 10);
 
     if (USE_DB) {
       const exists = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1`, [email]);
-      if (exists.rowCount) return res.status(409).send("Email já cadastrado.");
+      if (exists.rowCount) {
+        return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
+      }
 
-      await pool.query(
-        `INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`,
-        [nome, email, hash, role]
-      );
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role,active) VALUES ($1,$2,$3,$4,true)`, [
+        nome,
+        email,
+        hash,
+        role,
+      ]);
     } else {
-      const exists = mock.users.find(u => u.email.toLowerCase() === email);
-      if (exists) return res.status(409).send("Email já cadastrado.");
+      const exists = mock.users.find((u) => String(u.email).toLowerCase() === email);
+      if (exists) {
+        return res.redirect(`/configuracoes?error=${encodeURIComponent("Email já cadastrado.")}`);
+      }
 
-      const id = mock.users.length ? Math.max(...mock.users.map(u => u.id)) + 1 : 1;
+      const id = mock.users.length ? Math.max(...mock.users.map((u) => u.id)) + 1 : 1;
       mock.users.push({ id, nome, email, senha_hash: hash, role, active: true, created_at: nowISO() });
     }
 
     await auditLog(req.session.user.nome, "Criou usuário", `email=${email}, role=${role}`);
-    return res.redirect("/configuracoes");
+    return res.redirect(`/configuracoes?success=${encodeURIComponent("Usuário criado.")}`);
   } catch (err) {
     console.error("USR_CREATE_ERR:", err);
-    return res.status(500).send("Erro ao criar usuário.");
+    return res.redirect(`/configuracoes?error=${encodeURIComponent("Erro ao criar usuário.")}`);
   }
 });
 
@@ -1237,20 +1274,20 @@ app.post("/configuracoes/usuarios/:id/role", requireAdminOrDirector, async (req,
   try {
     const id = safeInt(req.params.id, 0);
     const role = String(req.body.role || "user").trim();
-    if (!id) return res.status(400).send("ID inválido.");
+    if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
 
     if (USE_DB) {
       await pool.query(`UPDATE users SET role=$1 WHERE id=$2`, [role, id]);
     } else {
-      const u = mock.users.find(x => x.id === id);
+      const u = mock.users.find((x) => x.id === id);
       if (u) u.role = role;
     }
 
     await auditLog(req.session.user.nome, "Alterou cargo", `userId=${id} -> ${role}`);
-    return res.redirect("/configuracoes");
+    return res.redirect(`/configuracoes?success=${encodeURIComponent("Cargo atualizado.")}`);
   } catch (err) {
     console.error("USR_ROLE_ERR:", err);
-    return res.status(500).send("Erro ao alterar cargo.");
+    return res.redirect(`/configuracoes?error=${encodeURIComponent("Erro ao alterar cargo.")}`);
   }
 });
 
@@ -1259,23 +1296,25 @@ app.post("/configuracoes/usuarios/:id/active", requireAdminOrDirector, async (re
   try {
     const id = safeInt(req.params.id, 0);
     const active = String(req.body.active || "true") === "true";
-    if (!id) return res.status(400).send("ID inválido.");
+    if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
 
     // evita se desativar sozinho
-    if (id === req.session.user.id && !active) return res.status(400).send("Você não pode desativar o próprio usuário.");
+    if (id === req.session.user.id && !active) {
+      return res.redirect(`/configuracoes?error=${encodeURIComponent("Você não pode desativar o próprio usuário.")}`);
+    }
 
     if (USE_DB) {
       await pool.query(`UPDATE users SET active=$1 WHERE id=$2`, [active, id]);
     } else {
-      const u = mock.users.find(x => x.id === id);
+      const u = mock.users.find((x) => x.id === id);
       if (u) u.active = active;
     }
 
     await auditLog(req.session.user.nome, "Alterou status do usuário", `userId=${id}, active=${active}`);
-    return res.redirect("/configuracoes");
+    return res.redirect(`/configuracoes?success=${encodeURIComponent("Status do usuário atualizado.")}`);
   } catch (err) {
     console.error("USR_ACTIVE_ERR:", err);
-    return res.status(500).send("Erro ao ativar/desativar usuário.");
+    return res.redirect(`/configuracoes?error=${encodeURIComponent("Erro ao ativar/desativar usuário.")}`);
   }
 });
 
@@ -1284,23 +1323,25 @@ app.post("/configuracoes/usuarios/:id/reset-senha", requireAdminOrDirector, asyn
   try {
     const id = safeInt(req.params.id, 0);
     const novaSenha = String(req.body.novaSenha || "");
-    if (!id) return res.status(400).send("ID inválido.");
-    if (!novaSenha || novaSenha.length < 6) return res.status(400).send("Senha muito curta (mínimo 6).");
+    if (!id) return res.redirect(`/configuracoes?error=${encodeURIComponent("ID inválido.")}`);
+    if (!novaSenha || novaSenha.length < 6) {
+      return res.redirect(`/configuracoes?error=${encodeURIComponent("Senha muito curta (mínimo 6).")}`);
+    }
 
     const hash = await bcrypt.hash(novaSenha, 10);
 
     if (USE_DB) {
       await pool.query(`UPDATE users SET senha_hash=$1 WHERE id=$2`, [hash, id]);
     } else {
-      const u = mock.users.find(x => x.id === id);
+      const u = mock.users.find((x) => x.id === id);
       if (u) u.senha_hash = hash;
     }
 
     await auditLog(req.session.user.nome, "Resetou senha", `userId=${id}`);
-    return res.redirect("/configuracoes");
+    return res.redirect(`/configuracoes?success=${encodeURIComponent("Senha resetada.")}`);
   } catch (err) {
     console.error("USR_RESET_ERR:", err);
-    return res.status(500).send("Erro ao resetar senha.");
+    return res.redirect(`/configuracoes?error=${encodeURIComponent("Erro ao resetar senha.")}`);
   }
 });
 
