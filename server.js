@@ -4,12 +4,21 @@
  * Regras implantadas:
  * - Cargos oficiais: atendimento | comercial | financeiro | admin | diretor
  * - Status oficiais (fluxo): Aberto | Em análise | Aguardando cliente | Aguardando fábrica | Finalizado – Financeiro | Diretoria
- * - Permissões:
- *   Comercial: cria/comenta; vê só o que criou; não altera status
- *   Atendimento: vê tudo; cria/comenta; altera status até "Finalizado – Financeiro"
- *   Financeiro: vê só status "Finalizado – Financeiro"; vê custo; comenta; pode devolver para status anteriores ou enviar para "Diretoria"
- *   Diretor(a): vê tudo; comenta; só altera status quando status atual = "Diretoria"
- *   Admin: tudo (inclui alterar status sempre e gerir usuários)
+ * - Permissões de VISUALIZAÇÃO (conforme pedido):
+ *   Atendimento: vê TODAS (inclusive encerradas)
+ *   Financeiro: vê TODAS (inclusive encerradas)
+ *   Diretor(a): vê TODAS (inclusive encerradas)
+ *   Admin: vê TODAS (inclusive encerradas)
+ *   Comercial: vê SOMENTE as que criou (inclusive encerradas)
+ *
+ * - Edição:
+ *   Responsável: SOMENTE Admin pode ver/mudar (os demais não aparecem no EJS e o backend ignora)
+ *   Status: segue seu fluxo atual:
+ *     Comercial: não altera
+ *     Atendimento: altera até "Finalizado – Financeiro"
+ *     Financeiro: altera somente quando status atual = "Finalizado – Financeiro" (pode voltar/enviar para Diretoria)
+ *     Diretor(a): só altera quando status atual = "Diretoria"
+ *     Admin: altera sempre
  */
 
 const path = require("path");
@@ -226,19 +235,21 @@ function canSeeCost(req) {
   return isFinanceiro(req) || isAdmin(req) || isDirector(req);
 }
 
-function canViewOcorrenciaByStatus(req, status) {
-  const st = normalizeStatusToOfficial(status);
+/**
+ * ✅ NOVA REGRA (pedido do Rafa):
+ * Atendimento, Financeiro, Diretor(a), Admin -> veem TODAS as ocorrências (inclusive encerradas)
+ * Comercial -> vê apenas as que criou (checado nas queries / created_by)
+ */
+function canViewOcorrencia(req) {
+  return isAdmin(req) || isDirector(req) || isAtendimento(req) || isFinanceiro(req) || isComercial(req);
+}
 
-  if (isAdmin(req) || isDirector(req) || isAtendimento(req)) return true;
-
-  if (isFinanceiro(req)) {
-    // Financeiro só vê quando estiver em Finalizado – Financeiro.
-    return st === STATUS.FINALIZADO_FIN;
-  }
-
-  // Comercial: a regra de "ver" é por created_by (tratada nas queries),
-  // então aqui deixamos true para não bloquear o próprio chamado.
-  return true;
+/**
+ * Responsável:
+ * ✅ SOMENTE ADMIN pode alterar / ver no form.
+ */
+function canChangeResponsavel(req) {
+  return isAdmin(req);
 }
 
 function allowedNextStatuses(req, currentStatus) {
@@ -450,7 +461,7 @@ async function dbInit() {
     await pool.query(`UPDATE users SET password_hash = COALESCE(password_hash, senha_hash) WHERE password_hash IS NULL;`);
   }
 
-  // ⚠️ Normaliza roles antigas para o conjunto permitido (seguro)
+  // ⚠️ Normaliza roles antigas
   await pool.query(`
     UPDATE users
     SET role = CASE
@@ -660,6 +671,7 @@ app.use((req, res, next) => {
   res.locals.isFinanceiro = isFinanceiro(req);
   res.locals.isAtendimento = isAtendimento(req);
   res.locals.isComercial = isComercial(req);
+  res.locals.canChangeResponsavel = canChangeResponsavel(req);
   next();
 });
 
@@ -728,10 +740,6 @@ app.get("/logout", async (req, res) => {
   req.session.destroy(() => res.redirect("/login"));
 });
 
-// ✅ remove auto-cadastro (se você quiser manter, me avisa)
-// app.get("/register", ...)
-// app.post("/register", ...)
-
 app.get("/esqueci-senha", (req, res) => res.redirect("/login"));
 
 /* -----------------------------
@@ -747,19 +755,16 @@ app.get("/dashboard", requireAuth, async (req, res) => {
     const serieSemanal = Array(11).fill(0);
     const motivos = { IVPLAST: 0, Cliente: 0, Transportadora: 0, Vendedor: 0 };
 
-    // Base visibility
     const role = userRole(req);
 
     if (USE_DB) {
       let q = `SELECT motivo, status, custo_estimado, created_at, updated_at, created_by FROM ocorrencias`;
       const params = [];
 
+      // ✅ só comercial é filtrado
       if (role === ROLES.COMERCIAL) {
         q += ` WHERE created_by=$1`;
         params.push(req.session.user.id);
-      } else if (role === ROLES.FINANCEIRO) {
-        q += ` WHERE status=$1`;
-        params.push(STATUS.FINALIZADO_FIN);
       }
 
       const r = await pool.query(q, params);
@@ -768,7 +773,6 @@ app.get("/dashboard", requireAuth, async (req, res) => {
       total = rows.length;
       abertas = rows.filter((o) => normalizeStatusToOfficial(o.status) !== STATUS.DIRETORIA).length;
 
-      // custo só entra no KPI se tiver permissão de ver custo
       custoTotal = canSeeCost(req) ? rows.reduce((acc, o) => acc + Number(o.custo_estimado || 0), 0) : 0;
 
       const tempos = rows.map((o) => hoursBetween(o.created_at, o.updated_at)).filter((n) => n > 0);
@@ -783,10 +787,9 @@ app.get("/dashboard", requireAuth, async (req, res) => {
         if (motivos[m] !== undefined) motivos[m] += 1;
       });
     } else {
-      // mock
       let base = mock.ocorrencias;
+
       if (role === ROLES.COMERCIAL) base = base.filter((o) => o.created_by === req.session.user.id);
-      if (role === ROLES.FINANCEIRO) base = base.filter((o) => normalizeStatusToOfficial(o.status) === STATUS.FINALIZADO_FIN);
 
       total = base.length || 0;
       abertas = base.filter((o) => normalizeStatusToOfficial(o.status) !== STATUS.DIRETORIA).length || 0;
@@ -822,12 +825,10 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
       const params = [];
       const where = [];
 
+      // ✅ só comercial é filtrado
       if (role === ROLES.COMERCIAL) {
         where.push(`created_by=$${params.length + 1}`);
         params.push(req.session.user.id);
-      } else if (role === ROLES.FINANCEIRO) {
-        where.push(`status=$${params.length + 1}`);
-        params.push(STATUS.FINALIZADO_FIN);
       }
 
       if (statusFilter && STATUS_SET.has(statusFilter)) {
@@ -854,7 +855,6 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
       let base = mock.ocorrencias;
 
       if (role === ROLES.COMERCIAL) base = base.filter((o) => o.created_by === req.session.user.id);
-      if (role === ROLES.FINANCEIRO) base = base.filter((o) => normalizeStatusToOfficial(o.status) === STATUS.FINALIZADO_FIN);
 
       lista = base
         .slice()
@@ -892,7 +892,7 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 
 /* -------- /novo (GET) -------- */
 app.get("/novo", requireAuth, (req, res) => {
-  // comercial pode criar; atendimento pode criar; admin/diretor pode criar; financeiro NÃO precisa criar
+  // comercial pode criar; atendimento pode criar; admin/diretor pode criar; financeiro NÃO cria
   if (isFinanceiro(req)) return res.status(403).send("Financeiro não cria ocorrência.");
   res.render("novo", { usuario: req.session.user, canSeeCost: canSeeCost(req), error: null, success: null });
 });
@@ -936,14 +936,18 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     const item_obs = String(req.body.item_obs || "").trim();
 
     if (!data.razao_social || !data.descricao) {
-      return res.status(400).render("novo", { usuario: req.session.user, canSeeCost: canSeeCost(req), error: "Preencha Razão social e Descrição.", success: null });
+      return res
+        .status(400)
+        .render("novo", { usuario: req.session.user, canSeeCost: canSeeCost(req), error: "Preencha Razão social e Descrição.", success: null });
     }
     if (!data.cliente_emitiu_nfd) data.nfd_numero = "";
 
-    // se atendimento/admin/diretor criou, pode respeitar responsavel enviado, mas LIMITA a lista oficial
+    // Se atendimento/admin/diretor criou, pode respeitar responsavel enviado,
+    // MAS AGORA: RESPONSÁVEL SÓ ADMIN DEVERIA DEFINIR.
+    // Então aqui mantemos a regra mais segura: só Admin respeita "responsavel" vindo do form.
     const respIn = cleanStr(req.body.responsavel || "Atendimento");
     const respAllowed = new Set(["Atendimento", "Comercial", "Financeiro", "Diretoria"]);
-    if (creatorRole !== ROLES.COMERCIAL && respAllowed.has(respIn)) data.responsavel = respIn;
+    if (isAdmin(req) && respAllowed.has(respIn)) data.responsavel = respIn;
 
     let newId = null;
 
@@ -1053,22 +1057,18 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
   if (!ocorrenciaId || !anexoId) return res.status(400).send("Parâmetros inválidos.");
 
   try {
-    // permissão por role/status
     if (USE_DB) {
-      const r = await pool.query(`SELECT id, created_by, status FROM ocorrencias WHERE id=$1 LIMIT 1`, [ocorrenciaId]);
+      const r = await pool.query(`SELECT id, created_by FROM ocorrencias WHERE id=$1 LIMIT 1`, [ocorrenciaId]);
       if (!r.rowCount) return res.status(404).send("Ocorrência não encontrada.");
 
       const occ = r.rows[0];
-      const st = normalizeStatusToOfficial(occ.status);
 
-      if (!canViewOcorrenciaByStatus(req, st)) return res.status(403).send("Acesso negado.");
+      // ✅ comercial só pode baixar anexos do que ele criou
       if (isComercial(req) && occ.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
     } else {
       const occ = mock.ocorrencias.find((o) => o.id === ocorrenciaId);
       if (!occ) return res.status(404).send("Ocorrência não encontrada.");
-      const st = normalizeStatusToOfficial(occ.status);
 
-      if (!canViewOcorrenciaByStatus(req, st)) return res.status(403).send("Acesso negado.");
       if (isComercial(req) && occ.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
     }
 
@@ -1118,8 +1118,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       createdBy = o.created_by;
       currentStatus = normalizeStatusToOfficial(o.status);
 
-      // perms
-      if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
+      // ✅ comercial só vê o que criou
       if (isComercial(req) && createdBy !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
       const acts = await pool.query(`SELECT quem, texto, created_at FROM ocorrencia_atividades WHERE ocorrencia_id=$1 ORDER BY id DESC LIMIT 50`, [id]);
@@ -1149,7 +1148,6 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       createdBy = found.created_by;
       currentStatus = normalizeStatusToOfficial(found.status);
 
-      if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
       if (isComercial(req) && createdBy !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
       itens = found.itens || [];
@@ -1180,8 +1178,12 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       id,
       canSeeCost: canSeeCost(req),
       role: userRole(req),
+
       canEditStatus: canChangeStatus(req, currentStatus),
       allowedStatuses: allowedNextStatuses(req, currentStatus),
+
+      // ✅ novo: somente admin consegue ver/mudar responsável
+      canChangeResponsavel: canChangeResponsavel(req),
     });
   } catch (err) {
     console.error("DETALHE_ERR:", err);
@@ -1201,7 +1203,7 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
     // carrega status atual e dono (pra regra)
     let occ = null;
     if (USE_DB) {
-      const r = await pool.query(`SELECT id, created_by, status FROM ocorrencias WHERE id=$1 LIMIT 1`, [id]);
+      const r = await pool.query(`SELECT id, created_by, status, responsavel FROM ocorrencias WHERE id=$1 LIMIT 1`, [id]);
       if (!r.rowCount) return res.redirect("/ocorrencias");
       occ = r.rows[0];
     } else {
@@ -1212,11 +1214,10 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
     const currentStatus = normalizeStatusToOfficial(occ.status);
     const createdBy = occ.created_by;
 
-    // permissão de ver
-    if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
+    // ✅ comercial só pode alterar se fosse dele, mas no seu fluxo comercial NÃO altera status mesmo assim
     if (isComercial(req) && createdBy !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
-    // permissão de alterar
+    // permissão de alterar status
     if (!canChangeStatus(req, currentStatus)) {
       return res.status(403).send("Seu cargo não permite alterar status neste momento.");
     }
@@ -1224,23 +1225,34 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
       return res.status(403).send("Transição de status não permitida para seu cargo.");
     }
 
-    // responsavel: limita opções oficiais (não inventa áreas)
+    // ✅ RESPONSÁVEL: SOMENTE ADMIN
     const respAllowed = new Set(["Atendimento", "Comercial", "Financeiro", "Diretoria"]);
-    const responsavel = respAllowed.has(responsavelIn) ? responsavelIn : "Atendimento";
+    let responsavelFinal = String(occ.responsavel || "Atendimento");
+
+    if (canChangeResponsavel(req)) {
+      responsavelFinal = respAllowed.has(responsavelIn) ? responsavelIn : "Atendimento";
+    }
+    // se não for admin, ignora responsavel vindo do form (fica fixo)
 
     if (USE_DB) {
-      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [statusIn, responsavel, id]);
+      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [statusIn, responsavelFinal, id]);
       await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
         id,
         req.session.user.nome,
-        `Atualizou: status=${statusIn}, responsável=${responsavel}.`,
+        canChangeResponsavel(req)
+          ? `Atualizou: status=${statusIn}, responsável=${responsavelFinal}.`
+          : `Atualizou: status=${statusIn}.`,
       ]);
     } else {
       occ.status = statusIn;
-      occ.responsavel = responsavel;
+      occ.responsavel = responsavelFinal;
       occ.updated_at = nowISO();
       occ.atividades = occ.atividades || [];
-      occ.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: `Atualizou: status=${statusIn}, responsável=${responsavel}.` });
+      occ.atividades.unshift({
+        quando: "agora",
+        quem: req.session.user.nome,
+        texto: canChangeResponsavel(req) ? `Atualizou: status=${statusIn}, responsável=${responsavelFinal}.` : `Atualizou: status=${statusIn}.`,
+      });
     }
 
     await auditLog(req.session.user.nome, "Alterou status/responsável", `#${id} (${statusIn})`);
@@ -1259,7 +1271,6 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   if (!comentario) return res.redirect(`/ocorrencias/${id}`);
 
   try {
-    // carrega dono/status pra permissão de visão
     let occ = null;
     if (USE_DB) {
       const r = await pool.query(`SELECT id, created_by, status FROM ocorrencias WHERE id=$1 LIMIT 1`, [id]);
@@ -1270,8 +1281,7 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
       if (!occ) return res.redirect("/ocorrencias");
     }
 
-    const currentStatus = normalizeStatusToOfficial(occ.status);
-    if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
+    // ✅ comercial só comenta no que é dele
     if (isComercial(req) && occ.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
     if (USE_DB) {
@@ -1302,7 +1312,6 @@ app.get("/relatorios", requireAuth, async (req, res) => {
 
 /* -----------------------------
    Configurações / Usuários / Auditoria
-   (mantive igual seu fluxo, mas travando os cargos)
 ----------------------------- */
 app.get("/configuracoes", requireAdminOrDirector, async (req, res) => {
   try {
