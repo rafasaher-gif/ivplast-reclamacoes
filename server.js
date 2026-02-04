@@ -8,9 +8,16 @@
  *   SESSION_SECRET=...
  *   DATABASE_URL=postgres://...
  *   DATABASE_SSL=true
+ *
  *   ADMIN_EMAIL=...
  *   ADMIN_NAME=...
  *   ADMIN_PASSWORD=...
+ *
+ *   DIRECTOR_EMAIL=...
+ *   DIRECTOR_NAME=...
+ *   DIRECTOR_PASSWORD=...
+ *
+ *   UPLOAD_DIR=/var/data/uploads   (RECOMENDADO com disco persistente no Render)
  */
 
 const path = require("path");
@@ -21,11 +28,7 @@ const bcrypt = require("bcryptjs");
 const multer = require("multer");
 
 let pg;
-try {
-  pg = require("pg");
-} catch (_) {
-  pg = null;
-}
+try { pg = require("pg"); } catch (_) { pg = null; }
 
 const app = express();
 app.set("trust proxy", 1);
@@ -40,8 +43,12 @@ app.use(express.json());
 
 /* -----------------------------
    Uploads
+   DICA: Em produção use UPLOAD_DIR apontando para disco persistente do Render.
 ----------------------------- */
-const UPLOAD_DIR = path.join(__dirname, "uploads");
+const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.join(__dirname, "uploads");
+
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const upload = multer({
@@ -102,6 +109,19 @@ function requireAuth(req, res, next) {
   if (!isAuthed(req)) return res.redirect("/login");
   next();
 }
+function userRole(req) {
+  return String((req.session.user && req.session.user.role) ? req.session.user.role : "").toLowerCase();
+}
+function isDirector(req) {
+  const role = userRole(req);
+  return role === "diretor" || role === "diretoria";
+}
+function requireDirector(req, res, next) {
+  if (!isAuthed(req)) return res.redirect("/login");
+  if (!isDirector(req)) return res.status(403).send("Acesso negado. Apenas Diretor(a).");
+  next();
+}
+
 function nowISO() {
   return new Date().toISOString();
 }
@@ -133,6 +153,9 @@ function hoursBetween(aISO, bISO) {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
   return Math.max(0, Math.round((b - a) / (1000 * 60 * 60)));
 }
+function normalizeStatus(s) {
+  return String(s || "").trim().toLowerCase();
+}
 
 /* -----------------------------
    MOCK (sem DB)
@@ -144,26 +167,34 @@ const mock = {
   auditoria: [],
 };
 
-function ensureMockAdmin() {
-  const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
-  const adminPass = String(process.env.ADMIN_PASSWORD || "");
-  const adminName = process.env.ADMIN_NAME || "Admin";
-  if (!adminEmail || !adminPass) return;
+function ensureMockUserFromEnv(kind) {
+  // kind: "admin" | "director"
+  const emailEnv = kind === "director" ? "DIRECTOR_EMAIL" : "ADMIN_EMAIL";
+  const passEnv  = kind === "director" ? "DIRECTOR_PASSWORD" : "ADMIN_PASSWORD";
+  const nameEnv  = kind === "director" ? "DIRECTOR_NAME" : "ADMIN_NAME";
+  const role     = kind === "director" ? "diretor" : "admin";
 
-  const exists = mock.users.find((u) => u.email.toLowerCase() === adminEmail);
+  const email = String(process.env[emailEnv] || "").trim().toLowerCase();
+  const pass  = String(process.env[passEnv] || "");
+  const name  = process.env[nameEnv] || (kind === "director" ? "Diretor" : "Admin");
+  if (!email || !pass) return;
+
+  const exists = mock.users.find((u) => u.email.toLowerCase() === email);
   if (!exists) {
-    const hash = bcrypt.hashSync(adminPass, 10);
+    const hash = bcrypt.hashSync(pass, 10);
+    const id = mock.users.length ? Math.max(...mock.users.map(u => u.id)) + 1 : 1;
     mock.users.push({
-      id: 1,
-      nome: adminName,
-      email: adminEmail,
+      id,
+      nome: name,
+      email,
       senha_hash: hash,
-      role: "admin",
+      role,
       created_at: nowISO(),
     });
   }
 }
-ensureMockAdmin();
+ensureMockUserFromEnv("admin");
+ensureMockUserFromEnv("director");
 
 /* -----------------------------
    Settings/Auditoria (DB/MOCK)
@@ -281,12 +312,12 @@ async function dbInit() {
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS nfd_numero TEXT;`);
 
-  // ✅ CORREÇÃO DO ERRO: coluna "tipo" (legado) pode existir como NOT NULL no seu DB
+  // ✅ LEGADO: coluna "tipo" pode existir como NOT NULL no seu DB
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS tipo TEXT;`);
   await pool.query(`UPDATE ocorrencias SET tipo = COALESCE(tipo, 'Comercial') WHERE tipo IS NULL;`);
   await pool.query(`ALTER TABLE ocorrencias ALTER COLUMN tipo SET DEFAULT 'Comercial';`);
 
-  // Atividades / anexos
+  // Atividades
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_atividades (
       id SERIAL PRIMARY KEY,
@@ -297,6 +328,7 @@ async function dbInit() {
     );
   `);
 
+  // Anexos
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_anexos (
       id SERIAL PRIMARY KEY,
@@ -309,7 +341,7 @@ async function dbInit() {
     );
   `);
 
-  // Itens por ocorrência
+  // Itens
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ocorrencia_itens (
       id SERIAL PRIMARY KEY,
@@ -335,16 +367,13 @@ async function dbInit() {
   const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const adminPass = String(process.env.ADMIN_PASSWORD || "");
   const adminName = process.env.ADMIN_NAME || "Admin";
-
   if (adminEmail && adminPass) {
     const hash = await bcrypt.hash(adminPass, 10);
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [adminEmail]);
 
     if (existing.rowCount === 0) {
       await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'admin')`, [
-        adminName,
-        adminEmail,
-        hash,
+        adminName, adminEmail, hash,
       ]);
       console.log("✅ Admin criado via ENV.");
     } else {
@@ -353,6 +382,28 @@ async function dbInit() {
       await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
       await pool.query(`UPDATE users SET role = 'admin' WHERE id=$1`, [id]);
       console.log("✅ Admin atualizado via ENV (senha reset).");
+    }
+  }
+
+  // ✅ Seed/Repair DIRECTOR (diretor(a))
+  const dirEmail = String(process.env.DIRECTOR_EMAIL || "").trim().toLowerCase();
+  const dirPass = String(process.env.DIRECTOR_PASSWORD || "");
+  const dirName = process.env.DIRECTOR_NAME || "Diretor";
+  if (dirEmail && dirPass) {
+    const hash = await bcrypt.hash(dirPass, 10);
+    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email)=$1 LIMIT 1`, [dirEmail]);
+
+    if (existing.rowCount === 0) {
+      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'diretor')`, [
+        dirName, dirEmail, hash,
+      ]);
+      console.log("✅ Diretor criado via ENV.");
+    } else {
+      const id = existing.rows[0].id;
+      await pool.query(`UPDATE users SET nome = COALESCE(nome,$1) WHERE id=$2`, [dirName, id]);
+      await pool.query(`UPDATE users SET senha_hash = $1 WHERE id=$2`, [hash, id]);
+      await pool.query(`UPDATE users SET role = 'diretor' WHERE id=$1`, [id]);
+      console.log("✅ Diretor atualizado via ENV (senha reset).");
     }
   }
 
@@ -382,7 +433,6 @@ app.get("/login", (req, res) => {
 app.post("/login", async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const senha = String(req.body.senha || "");
-
   if (!email || !senha) return res.status(400).render("login", { error: "Informe email e senha." });
 
   try {
@@ -444,11 +494,10 @@ app.post("/register", async (req, res) => {
       if (exists.rowCount > 0) {
         return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
       }
-      await pool.query(`INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'user')`, [
-        nome,
-        email,
-        hash,
-      ]);
+      await pool.query(
+        `INSERT INTO users (nome,email,senha_hash,role) VALUES ($1,$2,$3,'user')`,
+        [nome, email, hash]
+      );
     } else {
       const exists = mock.users.find((u) => u.email.toLowerCase() === email);
       if (exists) return res.status(409).render("register", { error: "Este email já está cadastrado.", success: null });
@@ -587,16 +636,16 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
   }
 });
 
-/* -------- /novo (GET) com canSeeCost -------- */
+/* -------- /novo (GET) -------- */
 app.get("/novo", requireAuth, (req, res) => {
-  const role = String(req.session.user?.role || "").toLowerCase();
-  const canSeeCost = ["admin", "financeiro", "diretoria"].includes(role);
+  const role = userRole(req);
+  const canSeeCost = ["admin", "financeiro", "diretoria", "diretor"].includes(role);
 
   res.render("novo", {
     usuario: req.session.user,
     canSeeCost,
     error: null,
-    success: null,
+    success: null
   });
 });
 
@@ -605,12 +654,12 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   try {
     const itensDescricao = []
       .concat(req.body["itens_descricao[]"] || req.body.itens_descricao || [])
-      .map((v) => String(v || "").trim())
-      .filter((v) => v.length > 0);
+      .map(v => String(v || "").trim())
+      .filter(v => v.length > 0);
 
     const itensQuantidadeRaw = []
       .concat(req.body["itens_quantidade[]"] || req.body.itens_quantidade || [])
-      .map((v) => String(v || "").trim());
+      .map(v => String(v || "").trim());
 
     const itemErrado = String(req.body.item_errado || "nao") === "sim";
 
@@ -626,7 +675,7 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       cliente_emitiu_nfd: String(req.body.cliente_emitiu_nfd || "nao") === "sim",
       nfd_numero: String(req.body.nfd_numero || "").trim(),
 
-      // ✅ FIX: "tipo" é legado no banco (NOT NULL). Valor padrão no backend.
+      // ✅ FIX legado
       tipo: "Comercial",
 
       descricao: String(req.body.descricao || "").trim(),
@@ -637,8 +686,8 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     const item_obs = String(req.body.item_obs || "").trim();
 
     if (!data.razao_social || !data.descricao) {
-      const role = String(req.session.user?.role || "").toLowerCase();
-      const canSeeCost = ["admin", "financeiro", "diretoria"].includes(role);
+      const role = userRole(req);
+      const canSeeCost = ["admin", "financeiro", "diretoria", "diretor"].includes(role);
 
       return res.status(400).render("novo", {
         usuario: req.session.user,
@@ -689,11 +738,10 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
 
       newId = r.rows[0].id;
 
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-        newId,
-        req.session.user.nome,
-        "Ocorrência criada.",
-      ]);
+      await pool.query(
+        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+        [newId, req.session.user.nome, "Ocorrência criada."]
+      );
 
       if (itemErrado) {
         const max = Math.min(10, itensDescricao.length);
@@ -716,14 +764,14 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
         }
 
         if (item_obs) {
-          await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-            newId,
-            req.session.user.nome,
-            `Obs. itens: ${item_obs}`,
-          ]);
+          await pool.query(
+            `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+            [newId, req.session.user.nome, `Obs. itens: ${item_obs}`]
+          );
         }
       }
 
+      // ✅ salvar anexos no DB
       const files = req.files || [];
       for (const f of files) {
         await pool.query(
@@ -734,7 +782,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       }
     } else {
       newId = mock.ocorrencias.length ? Math.max(...mock.ocorrencias.map((o) => o.id)) + 1 : 11000;
-
       mock.ocorrencias.push({
         id: newId,
         ...data,
@@ -750,11 +797,10 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
           : [],
         atividades: [
           { quando: "agora", quem: req.session.user.nome, texto: "Ocorrência criada." },
-          ...(itemErrado && item_obs
-            ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }]
-            : []),
+          ...(itemErrado && item_obs ? [{ quando: "agora", quem: req.session.user.nome, texto: `Obs. itens: ${item_obs}` }] : []),
         ],
-        anexos: (req.files || []).map((f) => ({
+        anexos: (req.files || []).map((f, idx) => ({
+          id: idx + 1,
           filename: f.filename,
           originalname: f.originalname,
           mimetype: f.mimetype,
@@ -768,6 +814,48 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
   } catch (err) {
     console.error("NOVO_POST_ERR:", err);
     return res.status(500).send("Erro ao salvar ocorrência.");
+  }
+});
+
+/* -------- Download de anexo (via DB) -------- */
+app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
+  const ocorrenciaId = safeInt(req.params.id, 0);
+  const anexoId = safeInt(req.params.anexoId, 0);
+  if (!ocorrenciaId || !anexoId) return res.status(400).send("Parâmetros inválidos.");
+
+  try {
+    let anexo = null;
+
+    if (USE_DB) {
+      const r = await pool.query(
+        `SELECT id, ocorrencia_id, filename, originalname
+         FROM ocorrencia_anexos
+         WHERE id=$1 AND ocorrencia_id=$2
+         LIMIT 1`,
+        [anexoId, ocorrenciaId]
+      );
+      anexo = r.rowCount ? r.rows[0] : null;
+    } else {
+      const oc = mock.ocorrencias.find(o => o.id === ocorrenciaId);
+      anexo = oc ? (oc.anexos || []).find(a => a.id === anexoId) : null;
+      if (anexo) anexo.ocorrencia_id = ocorrenciaId;
+    }
+
+    if (!anexo) return res.status(404).send("Anexo não encontrado.");
+
+    const filePath = path.join(UPLOAD_DIR, anexo.filename);
+    if (!fs.existsSync(filePath)) {
+      // isso confirma que o disco não é persistente ou o arquivo foi apagado
+      return res
+        .status(404)
+        .send("Arquivo não está disponível no servidor. (Provável falta de disco persistente no Render).");
+    }
+
+    // força download com o nome original
+    return res.download(filePath, anexo.originalname);
+  } catch (err) {
+    console.error("ANEXO_DOWNLOAD_ERR:", err);
+    return res.status(500).send("Erro ao baixar anexo.");
   }
 });
 
@@ -805,10 +893,10 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       itens = itensR.rows || [];
 
       const anexosR = await pool.query(
-        `SELECT id, filename, originalname, mimetype, size, created_at
+        `SELECT id, originalname, size, created_at
          FROM ocorrencia_anexos
          WHERE ocorrencia_id=$1
-         ORDER BY id ASC`,
+         ORDER BY id DESC`,
         [id]
       );
       anexos = anexosR.rows || [];
@@ -837,7 +925,12 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       if (!found) return res.redirect("/ocorrencias");
 
       itens = found.itens || [];
-      anexos = found.anexos || [];
+      anexos = (found.anexos || []).map(a => ({
+        id: a.id,
+        originalname: a.originalname,
+        size: a.size,
+        created_at: found.created_at || nowISO(),
+      }));
 
       ocorrencia = {
         id: found.id,
@@ -856,20 +949,31 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       };
     }
 
-    return res.render("ocorrencia_detalhe", { usuario: req.session.user, ocorrencia, itens, anexos, id });
+    res.render("ocorrencia_detalhe", {
+      usuario: req.session.user,
+      ocorrencia,
+      itens,
+      anexos,
+      id
+    });
   } catch (err) {
     console.error("DETALHE_ERR:", err);
-    return res.status(500).send("Erro ao carregar ocorrência.");
+    res.status(500).send("Erro ao carregar ocorrência.");
   }
 });
 
-/* Atualiza status/responsável */
+/* Atualiza status/responsável (só Diretor pode marcar Resolvido) */
 app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
   const id = safeInt(req.params.id, 0);
   if (!id) return res.redirect("/ocorrencias");
 
   const status = String(req.body.status || "").trim() || "Aberto";
   const responsavel = String(req.body.responsavel || "").trim() || "Atendimento";
+
+  // ✅ regra: somente diretor pode marcar "Resolvido"
+  if (normalizeStatus(status) === "resolvido" && !isDirector(req)) {
+    return res.status(403).send("Apenas Diretor(a) pode alterar o status para 'Resolvido'.");
+  }
 
   try {
     if (USE_DB) {
@@ -878,11 +982,10 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
         responsavel,
         id,
       ]);
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-        id,
-        req.session.user.nome,
-        `Atualizou: status=${status}, responsável=${responsavel}.`,
-      ]);
+      await pool.query(
+        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+        [id, req.session.user.nome, `Atualizou: status=${status}, responsável=${responsavel}.`]
+      );
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -916,11 +1019,10 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
   try {
     if (USE_DB) {
       await pool.query(`UPDATE ocorrencias SET updated_at=NOW() WHERE id=$1`, [id]);
-      await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
-        id,
-        req.session.user.nome,
-        comentario,
-      ]);
+      await pool.query(
+        `INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`,
+        [id, req.session.user.nome, comentario]
+      );
     } else {
       const o = mock.ocorrencias.find((x) => x.id === id);
       if (o) {
@@ -947,7 +1049,8 @@ app.get("/relatorios", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/configuracoes", requireAuth, async (req, res) => {
+/* ✅ Só Diretor: Configurações e Auditoria */
+app.get("/configuracoes", requireDirector, async (req, res) => {
   try {
     const config = {
       adminEmail: await getSetting("adminEmail", process.env.ADMIN_EMAIL || ""),
@@ -961,7 +1064,7 @@ app.get("/configuracoes", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/auditoria", requireAuth, async (req, res) => {
+app.get("/auditoria", requireDirector, async (req, res) => {
   try {
     let auditoria = [];
 
@@ -984,7 +1087,7 @@ app.get("/auditoria", requireAuth, async (req, res) => {
   }
 });
 
-/* Static */
+/* Static (mantém, mas o download oficial é pela rota /ocorrencias/:id/anexos/:anexoId) */
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 /* Boot */
