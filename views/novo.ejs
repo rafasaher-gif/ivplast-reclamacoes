@@ -4,15 +4,18 @@
  * Regras implantadas:
  * - Cargos oficiais: atendimento | comercial | financeiro | admin | diretor
  * - Status oficiais (fluxo): Aberto | Em análise | Aguardando cliente | Aguardando fábrica | Finalizado – Financeiro | Diretoria
- * - Visibilidade (LISTA / Busca por ocorrência):
- *   Admin/Diretor(a): vê tudo
- *   Financeiro: vê tudo (histórico completo), mas só altera status quando estiver em "Finalizado – Financeiro"
- *   Atendimento: vê Aberto | Em análise | Aguardando cliente | Aguardando fábrica | Diretoria
- *   Comercial: vê só as que criou (todos os status, inclusive encerradas)
+ * - Visibilidade (LISTA / BUSCA):
+ *   Admin/Diretor(a): veem TODAS
+ *   Financeiro: vê TODAS (mas só altera status quando estiver "Finalizado – Financeiro")
+ *   Atendimento: vê TODAS
+ *   Comercial: vê somente as que criou (inclusive encerradas)
  *
- * - Atualização:
- *   Status: segue as regras do canChangeStatus/allowedNextStatuses
- *   Responsável: SOMENTE ADMIN pode alterar (os demais ficam fixos)
+ * - Alteração de status:
+ *   Comercial: não altera
+ *   Atendimento: altera até "Finalizado – Financeiro"
+ *   Financeiro: só altera quando status atual = "Finalizado – Financeiro" (e pode mudar para qualquer outro)
+ *   Diretor(a): só altera quando status atual = "Diretoria"
+ *   Admin: altera sempre
  */
 
 const path = require("path");
@@ -140,7 +143,7 @@ function requireAuth(req, res, next) {
 
 function userRole(req) {
   const r = String(req.session?.user?.role || "").toLowerCase().trim();
-  return ALLOWED_ROLES.has(r) ? r : ROLES.COMERCIAL;
+  return ALLOWED_ROLES.has(r) ? r : ROLES.COMERCIAL; // fallback seguro
 }
 function isDirector(req) {
   return userRole(req) === ROLES.DIRETOR;
@@ -220,40 +223,35 @@ function normalizeStatusToOfficial(input) {
   if (low === "em andamento") return STATUS.EM_ANALISE;
   if (low === "em transporte") return STATUS.AGUARD_FABRICA;
 
+  // fallback (para valores inválidos)
   return STATUS.ABERTO;
 }
 
+/**
+ * ✅ CORREÇÃO DEFINITIVA:
+ * - se vier vazio (sem filtro), retorna "" (sem filtrar)
+ * - se vier algo, normaliza para status oficial
+ */
+function normalizeStatusOrEmpty(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  const st = normalizeStatusToOfficial(raw);
+  return STATUS_SET.has(st) ? st : "";
+}
+
 function canSeeCost(req) {
+  // Financeiro vê custo; Admin e Diretor também.
   return isFinanceiro(req) || isAdmin(req) || isDirector(req);
 }
 
 /**
- * Visibilidade por "status" (usada em detalhe, download de anexo etc)
- * Obs: A lista (/ocorrencias) tem regras próprias também.
+ * ✅ Visibilidade (detalhe/consulta):
+ * - Admin/Diretor/Atendimento/Financeiro: podem ver qualquer ocorrência
+ * - Comercial: restrição por created_by (tratada nas queries)
  */
-function canViewOcorrenciaByStatus(req, status) {
-  const st = normalizeStatusToOfficial(status);
-
-  if (isAdmin(req) || isDirector(req)) return true;
-
-  if (isFinanceiro(req)) {
-    // Financeiro vê tudo (histórico completo)
-    return true;
-  }
-
-  if (isAtendimento(req)) {
-    // Atendimento vê somente o que você pediu (inclui "Diretoria" como "fechado")
-    return [
-      STATUS.ABERTO,
-      STATUS.EM_ANALISE,
-      STATUS.AGUARD_CLIENTE,
-      STATUS.AGUARD_FABRICA,
-      STATUS.DIRETORIA,
-    ].includes(st);
-  }
-
-  // Comercial: visão é pelo created_by (controlado nas queries), então aqui retorna true
-  return true;
+function canViewOcorrencia(req) {
+  if (isAdmin(req) || isDirector(req) || isAtendimento(req) || isFinanceiro(req)) return true;
+  return true; // Comercial: regra é por created_by
 }
 
 function allowedNextStatuses(req, currentStatus) {
@@ -262,20 +260,24 @@ function allowedNextStatuses(req, currentStatus) {
   if (isAdmin(req)) return STATUS_FLOW.slice();
 
   if (isComercial(req)) {
-    return [cur]; // não altera status
+    // não altera status
+    return [cur];
   }
 
   if (isAtendimento(req)) {
+    // até Finalizado – Financeiro
     return [STATUS.ABERTO, STATUS.EM_ANALISE, STATUS.AGUARD_CLIENTE, STATUS.AGUARD_FABRICA, STATUS.FINALIZADO_FIN];
   }
 
   if (isFinanceiro(req)) {
+    // só atua quando estiver em Finalizado – Financeiro
     if (cur !== STATUS.FINALIZADO_FIN) return [cur];
-    // quando está em Finalizado – Financeiro, pode ir para qualquer status
+    // pode mudar para qualquer outro
     return STATUS_FLOW.slice();
   }
 
   if (isDirector(req)) {
+    // só altera quando estiver em Diretoria
     if (cur !== STATUS.DIRETORIA) return [cur];
     return STATUS_FLOW.slice();
   }
@@ -462,6 +464,7 @@ async function dbInit() {
     await pool.query(`UPDATE users SET password_hash = COALESCE(password_hash, senha_hash) WHERE password_hash IS NULL;`);
   }
 
+  // normaliza roles antigas
   await pool.query(`
     UPDATE users
     SET role = CASE
@@ -506,6 +509,7 @@ async function dbInit() {
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS cliente_emitiu_nfd BOOLEAN NOT NULL DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS nfd_numero TEXT;`);
 
+  // LEGADO: tipo
   await pool.query(`ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS tipo TEXT;`);
   await pool.query(`UPDATE ocorrencias SET tipo = COALESCE(tipo, 'Comercial') WHERE tipo IS NULL;`);
   await pool.query(`ALTER TABLE ocorrencias ALTER COLUMN tipo SET DEFAULT 'Comercial';`);
@@ -758,23 +762,13 @@ app.get("/dashboard", requireAuth, async (req, res) => {
     if (USE_DB) {
       let q = `SELECT motivo, status, custo_estimado, created_at, updated_at, created_by FROM ocorrencias`;
       const params = [];
-      const where = [];
 
-      // Comercial: só o que criou
+      // ✅ Comercial só vê o que criou
       if (role === ROLES.COMERCIAL) {
-        where.push(`created_by=$${params.length + 1}`);
+        q += ` WHERE created_by=$1`;
         params.push(req.session.user.id);
       }
-
-      // Atendimento: só os status permitidos
-      if (role === ROLES.ATENDIMENTO) {
-        where.push(`status = ANY($${params.length + 1})`);
-        params.push([STATUS.ABERTO, STATUS.EM_ANALISE, STATUS.AGUARD_CLIENTE, STATUS.AGUARD_FABRICA, STATUS.DIRETORIA]);
-      }
-
-      // Financeiro/Admin/Diretor: vê tudo (sem where adicional)
-
-      if (where.length) q += ` WHERE ` + where.join(" AND ");
+      // ✅ Financeiro agora vê tudo (NÃO filtra por status)
 
       const r = await pool.query(q, params);
       const rows = r.rows;
@@ -799,13 +793,7 @@ app.get("/dashboard", requireAuth, async (req, res) => {
       let base = mock.ocorrencias;
 
       if (role === ROLES.COMERCIAL) base = base.filter((o) => o.created_by === req.session.user.id);
-      if (role === ROLES.ATENDIMENTO) {
-        base = base.filter((o) =>
-          [STATUS.ABERTO, STATUS.EM_ANALISE, STATUS.AGUARD_CLIENTE, STATUS.AGUARD_FABRICA, STATUS.DIRETORIA].includes(
-            normalizeStatusToOfficial(o.status)
-          )
-        );
-      }
+      // Financeiro vê tudo no mock também
 
       total = base.length || 0;
       abertas = base.filter((o) => normalizeStatusToOfficial(o.status) !== STATUS.DIRETORIA).length || 0;
@@ -813,15 +801,6 @@ app.get("/dashboard", requireAuth, async (req, res) => {
 
       const tempos = base.map((o) => hoursBetween(o.created_at, o.updated_at)).filter((n) => n > 0);
       tempoMedioHoras = tempos.length ? Math.round(tempos.reduce((a, b) => a + b, 0) / tempos.length) : 0;
-
-      base.forEach((o) => {
-        const diffDays = Math.floor((Date.now() - new Date(o.created_at).getTime()) / (1000 * 60 * 60 * 24));
-        const idx = 10 - Math.min(10, Math.floor(diffDays / 7));
-        if (idx >= 0 && idx <= 10) serieSemanal[idx] += 1;
-
-        const m = String(o.motivo || "");
-        if (motivos[m] !== undefined) motivos[m] += 1;
-      });
     }
 
     res.render("dashboard", {
@@ -837,48 +816,31 @@ app.get("/dashboard", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * ✅ LISTA / Busca por Ocorrência
- * Corrigido para NUNCA “sumir” com histórico, conforme as regras.
- */
 app.get("/ocorrencias", requireAuth, async (req, res) => {
   const q = String(req.query.q || "").trim().toLowerCase();
-  const statusFilterRaw = String(req.query.status || "").trim();
-  const statusFilter = normalizeStatusToOfficial(statusFilterRaw);
+
+  // ✅ CORREÇÃO: só filtra se vier status no querystring
+  const statusFilter = normalizeStatusOrEmpty(req.query.status);
 
   try {
     let lista = [];
     const role = userRole(req);
-
-    const atendimentoStatuses = [
-      STATUS.ABERTO,
-      STATUS.EM_ANALISE,
-      STATUS.AGUARD_CLIENTE,
-      STATUS.AGUARD_FABRICA,
-      STATUS.DIRETORIA, // seu “fechado”
-    ];
 
     if (USE_DB) {
       let sql = `SELECT id, razao_social, created_at, updated_at, status, created_by FROM ocorrencias`;
       const params = [];
       const where = [];
 
-      // Comercial: só as que criou (todos os status)
+      // ✅ Comercial: só as que criou (com qualquer status)
       if (role === ROLES.COMERCIAL) {
         where.push(`created_by=$${params.length + 1}`);
         params.push(req.session.user.id);
       }
 
-      // Atendimento: apenas status do conjunto definido
-      if (role === ROLES.ATENDIMENTO) {
-        where.push(`status = ANY($${params.length + 1})`);
-        params.push(atendimentoStatuses);
-      }
+      // ✅ Financeiro agora NÃO filtra por status (vê tudo)
 
-      // Financeiro/Admin/Diretor: vê tudo (sem filtro)
-
-      // Filtro manual do select (se usuário escolher)
-      if (statusFilterRaw && STATUS_SET.has(statusFilter)) {
+      // ✅ Se usuário selecionou um status, aplica filtro
+      if (statusFilter) {
         where.push(`status=$${params.length + 1}`);
         params.push(statusFilter);
       }
@@ -887,7 +849,6 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
       sql += ` ORDER BY id DESC LIMIT 200`;
 
       const r = await pool.query(sql, params);
-
       lista = r.rows.map((o) => {
         const st = normalizeStatusToOfficial(o.status);
         return {
@@ -904,14 +865,6 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
 
       if (role === ROLES.COMERCIAL) base = base.filter((o) => o.created_by === req.session.user.id);
 
-      if (role === ROLES.ATENDIMENTO) {
-        base = base.filter((o) => atendimentoStatuses.includes(normalizeStatusToOfficial(o.status)));
-      }
-
-      if (statusFilterRaw && STATUS_SET.has(statusFilter)) {
-        base = base.filter((o) => normalizeStatusToOfficial(o.status) === statusFilter);
-      }
-
       lista = base
         .slice()
         .sort((a, b) => b.id - a.id)
@@ -927,17 +880,17 @@ app.get("/ocorrencias", requireAuth, async (req, res) => {
             situacao: st,
           };
         });
+
+      if (statusFilter) lista = lista.filter((o) => o.status === statusFilter);
     }
 
-    if (q) {
-      lista = lista.filter((o) => String(o.cliente).toLowerCase().includes(q) || String(o.id).includes(q));
-    }
+    if (q) lista = lista.filter((o) => String(o.cliente).toLowerCase().includes(q) || String(o.id).includes(q));
 
     res.render("ocorrencias", {
       usuario: req.session.user,
       ocorrencias: lista,
       q,
-      status: statusFilterRaw || "",
+      status: statusFilter || "",
       canSeeCost: canSeeCost(req),
     });
   } catch (err) {
@@ -983,7 +936,6 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
       descricao: String(req.body.descricao || "").trim(),
       custo_estimado: safeFloat(req.body.custo_estimado, 0),
 
-      // ✅ regra: padrão sempre Atendimento
       responsavel: "Atendimento",
       status: STATUS.ABERTO,
     };
@@ -995,10 +947,9 @@ app.post("/novo", requireAuth, upload.array("anexos", 10), async (req, res) => {
     }
     if (!data.cliente_emitiu_nfd) data.nfd_numero = "";
 
-    // ✅ Somente ADMIN pode definir responsável na criação (opcional)
     const respIn = cleanStr(req.body.responsavel || "Atendimento");
     const respAllowed = new Set(["Atendimento", "Comercial", "Financeiro", "Diretoria"]);
-    if (isAdmin(req) && respAllowed.has(respIn)) data.responsavel = respIn;
+    if (creatorRole !== ROLES.COMERCIAL && respAllowed.has(respIn)) data.responsavel = respIn;
 
     let newId = null;
 
@@ -1113,16 +1064,12 @@ app.get("/ocorrencias/:id/anexos/:anexoId", requireAuth, async (req, res) => {
       if (!r.rowCount) return res.status(404).send("Ocorrência não encontrada.");
 
       const occ = r.rows[0];
-      const st = normalizeStatusToOfficial(occ.status);
-
-      if (!canViewOcorrenciaByStatus(req, st)) return res.status(403).send("Acesso negado.");
+      if (!canViewOcorrencia(req)) return res.status(403).send("Acesso negado.");
       if (isComercial(req) && occ.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
     } else {
       const occ = mock.ocorrencias.find((o) => o.id === ocorrenciaId);
       if (!occ) return res.status(404).send("Ocorrência não encontrada.");
-      const st = normalizeStatusToOfficial(occ.status);
-
-      if (!canViewOcorrenciaByStatus(req, st)) return res.status(403).send("Acesso negado.");
+      if (!canViewOcorrencia(req)) return res.status(403).send("Acesso negado.");
       if (isComercial(req) && occ.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
     }
 
@@ -1172,7 +1119,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       createdBy = o.created_by;
       currentStatus = normalizeStatusToOfficial(o.status);
 
-      if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
+      if (!canViewOcorrencia(req)) return res.status(403).send("Acesso negado.");
       if (isComercial(req) && createdBy !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
       const acts = await pool.query(`SELECT quem, texto, created_at FROM ocorrencia_atividades WHERE ocorrencia_id=$1 ORDER BY id DESC LIMIT 50`, [id]);
@@ -1202,7 +1149,7 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       createdBy = found.created_by;
       currentStatus = normalizeStatusToOfficial(found.status);
 
-      if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
+      if (!canViewOcorrencia(req)) return res.status(403).send("Acesso negado.");
       if (isComercial(req) && createdBy !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
       itens = found.itens || [];
@@ -1235,8 +1182,6 @@ app.get("/ocorrencias/:id", requireAuth, async (req, res) => {
       role: userRole(req),
       canEditStatus: canChangeStatus(req, currentStatus),
       allowedStatuses: allowedNextStatuses(req, currentStatus),
-      // ✅ útil no EJS se você quiser esconder o campo de responsável pra não-admin
-      canEditResponsavel: isAdmin(req),
     });
   } catch (err) {
     console.error("DETALHE_ERR:", err);
@@ -1255,7 +1200,7 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
   try {
     let occ = null;
     if (USE_DB) {
-      const r = await pool.query(`SELECT id, created_by, status, responsavel FROM ocorrencias WHERE id=$1 LIMIT 1`, [id]);
+      const r = await pool.query(`SELECT id, created_by, status FROM ocorrencias WHERE id=$1 LIMIT 1`, [id]);
       if (!r.rowCount) return res.redirect("/ocorrencias");
       occ = r.rows[0];
     } else {
@@ -1266,7 +1211,7 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
     const currentStatus = normalizeStatusToOfficial(occ.status);
     const createdBy = occ.created_by;
 
-    if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
+    if (!canViewOcorrencia(req)) return res.status(403).send("Acesso negado.");
     if (isComercial(req) && createdBy !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
     if (!canChangeStatus(req, currentStatus)) {
@@ -1276,30 +1221,25 @@ app.post("/ocorrencias/:id/atualizar", requireAuth, async (req, res) => {
       return res.status(403).send("Transição de status não permitida para seu cargo.");
     }
 
-    // ✅ Responsável: SOMENTE ADMIN pode alterar. Caso contrário mantém o atual.
     const respAllowed = new Set(["Atendimento", "Comercial", "Financeiro", "Diretoria"]);
-    const responsavelNovo = (isAdmin(req) && respAllowed.has(responsavelIn)) ? responsavelIn : (occ.responsavel || "Atendimento");
+    const responsavel = respAllowed.has(responsavelIn) ? responsavelIn : "Atendimento";
 
     if (USE_DB) {
-      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [statusIn, responsavelNovo, id]);
+      await pool.query(`UPDATE ocorrencias SET status=$1, responsavel=$2, updated_at=NOW() WHERE id=$3`, [statusIn, responsavel, id]);
       await pool.query(`INSERT INTO ocorrencia_atividades (ocorrencia_id,quem,texto) VALUES ($1,$2,$3)`, [
         id,
         req.session.user.nome,
-        `Atualizou: status=${statusIn}${isAdmin(req) ? `, responsável=${responsavelNovo}` : ""}.`,
+        `Atualizou: status=${statusIn}, responsável=${responsavel}.`,
       ]);
     } else {
       occ.status = statusIn;
-      occ.responsavel = responsavelNovo;
+      occ.responsavel = responsavel;
       occ.updated_at = nowISO();
       occ.atividades = occ.atividades || [];
-      occ.atividades.unshift({
-        quando: "agora",
-        quem: req.session.user.nome,
-        texto: `Atualizou: status=${statusIn}${isAdmin(req) ? `, responsável=${responsavelNovo}` : ""}.`,
-      });
+      occ.atividades.unshift({ quando: "agora", quem: req.session.user.nome, texto: `Atualizou: status=${statusIn}, responsável=${responsavel}.` });
     }
 
-    await auditLog(req.session.user.nome, "Alterou status/responsável", `#${id} (${statusIn})`);
+    await auditLog(req.session.user.nome, "Alterou status", `#${id} (${statusIn})`);
     return res.redirect(`/ocorrencias/${id}`);
   } catch (err) {
     console.error("ATUALIZAR_ERR:", err);
@@ -1325,8 +1265,7 @@ app.post("/ocorrencias/:id/comentario", requireAuth, async (req, res) => {
       if (!occ) return res.redirect("/ocorrencias");
     }
 
-    const currentStatus = normalizeStatusToOfficial(occ.status);
-    if (!canViewOcorrenciaByStatus(req, currentStatus)) return res.status(403).send("Acesso negado.");
+    if (!canViewOcorrencia(req)) return res.status(403).send("Acesso negado.");
     if (isComercial(req) && occ.created_by !== req.session.user.id) return res.status(403).send("Acesso negado.");
 
     if (USE_DB) {
@@ -1416,6 +1355,7 @@ app.post("/configuracoes/senha", requireAdminOrDirector, async (req, res) => {
   }
 });
 
+// criar usuário
 app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, res) => {
   try {
     const nome = cleanStr(pickFirst(req.body.nome, req.body.name));
@@ -1457,6 +1397,7 @@ app.post("/configuracoes/usuarios/criar", requireAdminOrDirector, async (req, re
   }
 });
 
+// trocar cargo
 app.post("/configuracoes/usuarios/:id/role", requireAdminOrDirector, async (req, res) => {
   try {
     const id = safeInt(req.params.id, 0);
@@ -1478,6 +1419,7 @@ app.post("/configuracoes/usuarios/:id/role", requireAdminOrDirector, async (req,
   }
 });
 
+// ativar/desativar
 app.post("/configuracoes/usuarios/:id/active", requireAdminOrDirector, async (req, res) => {
   try {
     const id = safeInt(req.params.id, 0);
@@ -1499,6 +1441,7 @@ app.post("/configuracoes/usuarios/:id/active", requireAdminOrDirector, async (re
   }
 });
 
+// resetar senha
 app.post("/configuracoes/usuarios/:id/reset-senha", requireAdminOrDirector, async (req, res) => {
   try {
     const id = safeInt(req.params.id, 0);
